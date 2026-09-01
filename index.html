@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Quotation &amp; Invoice Suite | Solitaire Finz Mart</title>
+<meta name="robots" content="noindex" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="auth-guard.js" data-page-role="admin"></script>
+
+<style>
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+  .tool-card { display: block; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; box-shadow: var(--shadow); transition: border-color .15s ease, transform .15s ease; }
+  .tool-card:hover { border-color: var(--gold); transform: translateY(-2px); }
+  .tool-card .ti { font-family: 'Cormorant Garamond', serif; font-size: 22px; font-weight: 700; color: var(--gold-bright); margin-bottom: 6px; }
+  .tool-card .td { font-size: 12.5px; color: var(--ink-dim); line-height: 1.6; }
+  .stat-row { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  .stat { background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 16px; flex: 1; min-width: 140px; }
+  .stat .n { font-family: 'IBM Plex Mono', monospace; font-size: 20px; color: var(--gold-bright); }
+  .stat .l { font-size: 10.5px; color: var(--ink-faint); text-transform: uppercase; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-row">
+    <a href="index.html" class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none"><path d="M16 2 L28 9 V23 L16 30 L4 23 V9 Z" stroke="#C4A672" stroke-width="1.4"/></svg>
+      <div class="brand-text"><div class="name">SOLITAIRE</div><div class="tag">Quotation &amp; Invoice Suite</div></div>
+    </a>
+    <div class="topbar-actions" id="topbarActions"></div>
+  </div>
+  <div class="tabs">
+    <div class="tab active">Dashboard</div>
+    <a class="tab" href="quotation.html">Quotation</a>
+    <a class="tab" href="invoice.html">Invoice</a>
+  </div>
+</div>
+
+<main class="wrap" id="appMain" style="display:none;">
+  <h2 class="section-title">Fee Documentation</h2>
+
+  <div class="grid2">
+    <a class="tool-card" href="quotation.html">
+      <div class="ti">Sanction Quotation</div>
+      <div class="td">Pull a case by LN number and generate a branded processing-fee quotation letter with sanction terms, ready for client sign-off.</div>
+    </a>
+    <a class="tool-card" href="invoice.html">
+      <div class="ti">Tax Invoice</div>
+      <div class="td">Issue a sequentially-numbered GST invoice once the processing fee is agreed or received, saved to a permanent ledger.</div>
+    </a>
+  </div>
+
+  <div class="stat-row" id="statRow"></div>
+</main>
+
+<div id="notAuthWrap" style="display:none;">
+  <div class="not-authorized">
+    <h2 class="serif">Admin Access Only</h2>
+    <p>This tool is restricted to Admin/Owner accounts. Head back to your own workspace.</p>
+    <div style="margin-top:18px;"><a href="../index.html" class="btn btn-gold" style="display:inline-block;">Back to SOLITAIRE</a></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  function waitForAuth() {
+    return new Promise(resolve => {
+      const iv = setInterval(() => {
+        if (window.SolitaireAuth) { clearInterval(iv); resolve(window.SolitaireAuth); }
+      }, 80);
+      setTimeout(() => { clearInterval(iv); resolve(window.SolitaireAuth || null); }, 8000);
+    });
+  }
+
+  async function init() {
+    const auth = await waitForAuth();
+    const role = (auth && auth.profile && auth.profile.role || "").toLowerCase();
+    if (!auth || (role !== "admin" && role !== "owner")) {
+      document.getElementById("notAuthWrap").style.display = "block";
+      return;
+    }
+    document.getElementById("appMain").style.display = "block";
+    loadStats();
+  }
+
+  async function loadStats() {
+    const sb = window.SolitaireDB && window.SolitaireDB.sb;
+    const statRow = document.getElementById("statRow");
+    if (!sb) return;
+    try {
+      const { count: invoiceCount } = await sb.from("invoices").select("id", { count: "exact", head: true });
+      const { data: paidRows } = await sb.from("invoices").select("total_amount").eq("status", "paid");
+      const totalCollected = (paidRows || []).reduce((s, r) => s + (Number(r.total_amount) || 0), 0);
+      const { count: sanctionCount } = await sb.from("sanctions").select("lead_id", { count: "exact", head: true });
+
+      statRow.innerHTML = `
+        <div class="stat"><div class="n mono">${invoiceCount ?? 0}</div><div class="l">Invoices Issued</div></div>
+        <div class="stat"><div class="n mono">₹${totalCollected.toLocaleString("en-IN")}</div><div class="l">Fees Collected</div></div>
+        <div class="stat"><div class="n mono">${sanctionCount ?? 0}</div><div class="l">Sanctions on File</div></div>
+      `;
+    } catch (e) {
+      // invoices table may not exist yet — fail quietly on the dashboard
+      statRow.innerHTML = "";
+    }
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>
