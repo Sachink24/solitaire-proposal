@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Sign In | Solitaire Finz Mart</title>
+<meta name="robots" content="noindex" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+
+<style>
+  body { display: flex; align-items: center; justify-content: center; min-height: 100dvh; padding: 24px; }
+  .login-panel { width: 100%; max-width: 400px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 32px 28px; box-shadow: var(--shadow); }
+  .login-brand { text-align: center; margin-bottom: 22px; }
+  .login-brand .mark { width: 40px; height: 40px; margin: 0 auto 10px; display: block; }
+  .login-brand .name { font-family: 'Cormorant Garamond', serif; font-weight: 700; font-size: 24px; letter-spacing: .04em; color: var(--gold-bright); }
+  .login-brand .tag { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); margin-top: 4px; }
+  .login-rule { border: none; border-top: 1px solid var(--border); margin: 18px 0 20px; }
+  #loginStatus { margin-top: 14px; font-size: 12.5px; text-align: center; min-height: 16px; }
+  #loginStatus.error { color: var(--bad); }
+  #loginStatus.ok { color: var(--ok); }
+  .login-foot { margin-top: 18px; font-size: 10.5px; color: var(--ink-faint); line-height: 1.5; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="login-panel">
+  <div class="login-brand">
+    <svg class="mark" viewBox="0 0 32 32" fill="none"><path d="M16 2 L28 9 V23 L16 30 L4 23 V9 Z" stroke="#C4A672" stroke-width="1.4"/></svg>
+    <div class="name">SOLITAIRE</div>
+    <div class="tag">Quotation &amp; Invoice Suite</div>
+  </div>
+  <hr class="login-rule" />
+
+  <form id="loginForm">
+    <div class="field">
+      <label for="emailInput">Email</label>
+      <input id="emailInput" type="email" autocomplete="username" required />
+    </div>
+    <div class="field">
+      <label for="passwordInput">Password</label>
+      <input id="passwordInput" type="password" autocomplete="current-password" required />
+    </div>
+    <button id="loginBtn" type="submit" class="btn btn-gold">Sign In</button>
+  </form>
+
+  <div id="loginStatus"></div>
+
+  <div class="login-foot">
+    Admin / Owner access only. Contact Sachin if you need an account provisioned.
+  </div>
+</div>
+
+<script>
+(function () {
+  const REASON_MESSAGES = {
+    "not-provisioned": "Your login worked, but no Solitaire account is linked to it yet. Contact the admin to get set up.",
+    "inactive": "This account is marked inactive. Contact the admin.",
+    "profile-error": "Couldn't load your account details. Please try again.",
+    "config-missing": "App configuration failed to load. Please refresh.",
+  };
+
+  function getParam(name) {
+    return new URLSearchParams(location.search).get(name);
+  }
+
+  function nextPage() {
+    const n = getParam("next");
+    return n && !n.includes("login.html") ? n : "index.html";
+  }
+
+  function setStatus(msg, cls) {
+    const el = document.getElementById("loginStatus");
+    el.className = cls || "";
+    el.textContent = msg || "";
+  }
+
+  async function checkExistingSession() {
+    const sb = window.SolitaireDB && window.SolitaireDB.sb;
+    if (!sb) return;
+    const { data } = await sb.auth.getSession();
+    if (data && data.session) {
+      // Already signed in — verify they have a linked, active profile before bouncing forward.
+      const ok = await verifyProfile(sb, data.session.user.id);
+      if (ok) location.replace(nextPage());
+    }
+  }
+
+  async function verifyProfile(sb, authUserId) {
+    const { data: profile } = await sb.from("users").select("*").eq("auth_user_id", authUserId).maybeSingle();
+    if (!profile || (profile.status && profile.status !== "active")) {
+      await sb.auth.signOut();
+      return false;
+    }
+    return true;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const sb = window.SolitaireDB && window.SolitaireDB.sb;
+    const btn = document.getElementById("loginBtn");
+    const email = document.getElementById("emailInput").value.trim();
+    const password = document.getElementById("passwordInput").value;
+
+    setStatus("");
+    if (!sb) { setStatus("App configuration failed to load. Please refresh.", "error"); return; }
+    if (!email || !password) { setStatus("Enter your email and password.", "error"); return; }
+
+    btn.disabled = true; btn.textContent = "Signing in…";
+    try {
+      const { data, error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+
+      const ok = await verifyProfile(sb, data.user.id);
+      if (!ok) {
+        setStatus(REASON_MESSAGES["not-provisioned"], "error");
+        return;
+      }
+
+      setStatus("Signed in — redirecting…", "ok");
+      location.replace(nextPage());
+    } catch (err) {
+      console.error(err);
+      setStatus(err.message === "Invalid login credentials" ? "Incorrect email or password." : ("Error: " + err.message), "error");
+    } finally {
+      btn.disabled = false; btn.textContent = "Sign In";
+    }
+  }
+
+  const reason = getParam("reason");
+  if (reason && REASON_MESSAGES[reason]) setStatus(REASON_MESSAGES[reason], "error");
+
+  document.getElementById("loginForm").addEventListener("submit", handleSubmit);
+  checkExistingSession();
+})();
+</script>
+
+</body>
+</html>
