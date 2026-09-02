@@ -123,16 +123,15 @@ const SFM = (function () {
   }
 
   /* ---------------------------------------------------------------------
-     PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses html2canvas
-     + jsPDF directly (both are bundled inside html2pdf.bundle.min.js, which
-     the pages already load) rather than html2pdf.js's own .from().save()
-     chain — that chain was silently producing blank PDFs with no embedded
-     image and no visible error, so this calls each step directly and
-     validates the result instead.
+     PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses standalone
+     html2canvas + jsPDF globals loaded by quotation.html/invoice.html.
      --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
-    if (!window.html2canvas || !window.jspdf || !window.jspdf.jsPDF) {
-      throw new Error("PDF library failed to load (html2canvas / jsPDF script tags). Refresh the page and try again.");
+    if (typeof window.html2canvas !== "function") {
+      throw new Error("html2canvas failed to load. Please refresh the page and try again.");
+    }
+    if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+      throw new Error("jsPDF failed to load. Please refresh the page and try again.");
     }
 
     // Render fully on-screen (not off-canvas at left:-9999px) — some browsers
