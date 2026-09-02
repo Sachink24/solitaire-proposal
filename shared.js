@@ -127,19 +127,54 @@ const SFM = (function () {
      matches the existing PDF pipeline already used across the SOLITAIRE apps).
      --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
+    // Render fully on-screen (not off-canvas at left:-9999px) — some browsers
+    // skip layout/paint for elements positioned far outside the viewport,
+    // which produces a blank canvas for html2canvas to embed even though
+    // jsPDF still emits a valid (empty) page. Instead, cover the screen with
+    // an opaque white overlay and place the real content on top of it, so it
+    // never appears broken to the user even though it's technically visible.
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.zIndex = "99998";
+    overlay.style.background = "#ffffff";
+
     const container = document.createElement("div");
     container.style.position = "fixed";
-    container.style.left = "-9999px";
+    container.style.top = "0";
+    container.style.left = "0";
+    container.style.zIndex = "99999";
+    container.style.background = "#ffffff";
+    container.style.width = "780px";
     container.innerHTML = html;
+
+    document.body.appendChild(overlay);
     document.body.appendChild(container);
 
     try {
+      // Let web fonts finish loading and give the browser a couple of
+      // animation frames to actually paint before html2canvas snapshots it —
+      // capturing immediately after innerHTML/append is a common cause of
+      // blank or partially-blank PDFs.
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
       await window.html2pdf()
         .set({
           margin: 0,
           filename,
           image: { type: "jpeg", quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true },
+          html2canvas: {
+            scale: 2,
+            useCORS: true,
+            backgroundColor: "#ffffff",
+            scrollX: 0,
+            scrollY: 0,
+            windowWidth: container.scrollWidth,
+            windowHeight: container.scrollHeight,
+          },
           jsPDF: { unit: "pt", format: "a4", orientation: "portrait" },
           pagebreak: { mode: ["css", "legacy"] },
         })
@@ -147,6 +182,7 @@ const SFM = (function () {
         .save();
     } finally {
       document.body.removeChild(container);
+      document.body.removeChild(overlay);
     }
   }
 
