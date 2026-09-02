@@ -123,16 +123,22 @@ const SFM = (function () {
   }
 
   /* ---------------------------------------------------------------------
-     PDF EXPORT — shared branded-letterhead → PDF pipeline (html2pdf.js,
-     matches the existing PDF pipeline already used across the SOLITAIRE apps).
+     PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses html2canvas
+     + jsPDF directly (both are bundled inside html2pdf.bundle.min.js, which
+     the pages already load) rather than html2pdf.js's own .from().save()
+     chain — that chain was silently producing blank PDFs with no embedded
+     image and no visible error, so this calls each step directly and
+     validates the result instead.
      --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
+    if (!window.html2canvas || !window.jspdf || !window.jspdf.jsPDF) {
+      throw new Error("PDF library failed to load (html2canvas / jsPDF script tags). Refresh the page and try again.");
+    }
+
     // Render fully on-screen (not off-canvas at left:-9999px) — some browsers
     // skip layout/paint for elements positioned far outside the viewport,
-    // which produces a blank canvas for html2canvas to embed even though
-    // jsPDF still emits a valid (empty) page. Instead, cover the screen with
-    // an opaque white overlay and place the real content on top of it, so it
-    // never appears broken to the user even though it's technically visible.
+    // which produces a blank canvas even though the download still "succeeds".
+    // Covered by an opaque white overlay so it doesn't look broken.
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
@@ -152,34 +158,49 @@ const SFM = (function () {
     document.body.appendChild(container);
 
     try {
-      // Let web fonts finish loading and give the browser a couple of
-      // animation frames to actually paint before html2canvas snapshots it —
-      // capturing immediately after innerHTML/append is a common cause of
-      // blank or partially-blank PDFs.
       if (document.fonts && document.fonts.ready) {
         await document.fonts.ready;
       }
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-      await window.html2pdf()
-        .set({
-          margin: 0,
-          filename,
-          image: { type: "jpeg", quality: 0.98 },
-          html2canvas: {
-            scale: 2,
-            useCORS: true,
-            backgroundColor: "#ffffff",
-            scrollX: 0,
-            scrollY: 0,
-            windowWidth: container.scrollWidth,
-            windowHeight: container.scrollHeight,
-          },
-          jsPDF: { unit: "pt", format: "a4", orientation: "portrait" },
-          pagebreak: { mode: ["css", "legacy"] },
-        })
-        .from(container)
-        .save();
+      const canvas = await window.html2canvas(container, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: container.scrollWidth,
+        windowHeight: container.scrollHeight,
+      });
+
+      if (!canvas || !canvas.width || !canvas.height) {
+        throw new Error("Render came back empty (0×0 canvas) — nothing to put in the PDF. Try again after a full page refresh.");
+      }
+
+      const imgData = canvas.toDataURL("image/jpeg", 0.98);
+      if (!imgData || imgData.length < 1000) {
+        throw new Error("Captured image was empty. Try again after a full page refresh.");
+      }
+
+      const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+      let heightLeft = imgHeight;
+      let position = 0;
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      pdf.save(filename);
     } finally {
       document.body.removeChild(container);
       document.body.removeChild(overlay);
