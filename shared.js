@@ -28,16 +28,6 @@ const SFM = (function () {
 
   /* ---------------------------------------------------------------------
      DATA FETCH — pulls the lead + its latest sanction record.
-     Schema confirmed from admin.html:
-       leads: id, borrower(jsonb: name, mobile, location, pincode, email),
-              co_applicants(jsonb), property(jsonb: address, city, state, pincode),
-              loan_type, loan_amount, institution_name, stage, status,
-              credit_loan_amount, credit_term_months, credit_roi,
-              credit_fees, credit_conditions
-       sanctions: lead_id (unique, FK), application_no, sanction_amount,
-              tenure_months, roi, emi, processing_fee, insurance, banker,
-              sanction_reference_no, sanction_date, final_remarks, status,
-              approved_by, approved_at
      --------------------------------------------------------------------- */
   async function fetchLeadBundle(leadIdOrLN) {
     const sb = window.SolitaireDB && window.SolitaireDB.sb;
@@ -125,6 +115,19 @@ const SFM = (function () {
   /* ---------------------------------------------------------------------
      PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses standalone
      html2canvas + jsPDF globals loaded by quotation.html/invoice.html.
+
+     MOBILE FIX (Sep 2026): the offscreen render container previously used
+     `position: fixed`. html2canvas clones the DOM into a hidden iframe and
+     re-renders it there — but `position: fixed` elements inside that clone
+     stay pinned to the iframe's *visible* viewport height, not the full
+     `windowHeight` we pass in. On desktop the initial viewport is tall
+     enough that this mostly went unnoticed; on mobile (short initial
+     viewport) everything below roughly one screen's worth of content was
+     silently clipped, producing a PDF that cuts off partway down the page.
+     Switching the CAPTURED container to `position: absolute` avoids this,
+     since absolute elements lay out against full document height instead
+     of viewport height. Only the cosmetic overlay stays `fixed` — it is
+     never part of the captured element, so it doesn't affect the render.
      --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
     if (typeof window.html2canvas !== "function") {
@@ -134,18 +137,19 @@ const SFM = (function () {
       throw new Error("jsPDF failed to load. Please refresh the page and try again.");
     }
 
-    // Render fully on-screen (not off-canvas at left:-9999px) — some browsers
-    // skip layout/paint for elements positioned far outside the viewport,
-    // which produces a blank canvas even though the download still "succeeds".
-    // Covered by an opaque white overlay so it doesn't look broken.
+    // Cosmetic full-screen cover so the user doesn't see the render happen.
+    // This can stay `fixed` — it is not the element passed to html2canvas.
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
     overlay.style.zIndex = "99998";
     overlay.style.background = "#ffffff";
 
+    // IMPORTANT: `position: absolute`, not `fixed`. See comment above the
+    // function — `fixed` gets clipped to the initial mobile viewport height
+    // inside html2canvas's cloned iframe, cutting the PDF off partway down.
     const container = document.createElement("div");
-    container.style.position = "fixed";
+    container.style.position = "absolute";
     container.style.top = "0";
     container.style.left = "0";
     container.style.zIndex = "99999";
@@ -162,14 +166,24 @@ const SFM = (function () {
       }
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
+      // Re-read scrollWidth/scrollHeight AFTER the container is in the DOM
+      // and fonts are loaded, so these reflect true final layout size —
+      // critical on mobile where font metrics can shift wrap points.
+      const fullWidth = container.scrollWidth;
+      const fullHeight = container.scrollHeight;
+
       const canvas = await window.html2canvas(container, {
         scale: 2,
         useCORS: true,
         backgroundColor: "#ffffff",
         scrollX: 0,
         scrollY: 0,
-        windowWidth: container.scrollWidth,
-        windowHeight: container.scrollHeight,
+        x: 0,
+        y: 0,
+        width: fullWidth,
+        height: fullHeight,
+        windowWidth: fullWidth,
+        windowHeight: fullHeight,
       });
 
       if (!canvas || !canvas.width || !canvas.height) {
