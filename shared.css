@@ -1,7 +1,3 @@
-/* ============================================================================
-   SOLITAIRE — Diamond Noir shared theme (tokens match admin.html / credit.html
-   in SOLITAIRE-Legal-Technical-Credit, so these pages feel native to the suite)
-   ========================================================================== */
 :root {
   --bg: #0A0D12; --panel: #12161D; --panel-2: #171C25;
   --border: rgba(196, 166, 114, 0.22); --border-soft: rgba(196, 166, 114, 0.12);
