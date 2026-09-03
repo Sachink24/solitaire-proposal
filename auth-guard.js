@@ -1,20 +1,3 @@
-/* ============================================================================
-   SOLITAIRE — Auth guard
-   Drop this <script> tag (with a data-page-role attribute, informational only
-   — pages do their own role check) on every protected page, AFTER
-   supabase-config.js. It:
-     1. Reads the current Supabase Auth session (real supabase.auth session,
-        so auth.uid() works correctly in RLS policies across all tables).
-     2. Loads the matching row from public.users via auth_user_id = auth.uid().
-     3. Exposes window.SolitaireAuth = { session, user, profile } once ready.
-     4. Redirects to login.html (with ?next=) if there's no session, no
-        matching users row, or the account isn't status = 'active'.
-     5. Renders a "Signed in as ... / Sign out" control into any element with
-        id="topbarActions", if present on the page.
-   Pages themselves still do their own role check (admin/owner) against
-   window.SolitaireAuth.profile.role — this file only proves *who* is signed
-   in, not *what* they're allowed to see.
-   ========================================================================== */
 (function () {
   const LOGIN_PAGE = "login.html";
 
@@ -73,9 +56,6 @@
       return;
     }
     if (!profile) {
-      // Signed in with Supabase Auth but no linked row in public.users yet —
-      // this account hasn't been provisioned. Sign out rather than leaving
-      // them stuck in limbo with no role/name to show.
       await sb.auth.signOut();
       goToLogin("not-provisioned");
       return;
@@ -93,7 +73,6 @@
       if (event === "SIGNED_OUT") goToLogin();
     });
 
-    // Let pages that were already polling for window.SolitaireAuth know it's ready.
     document.dispatchEvent(new CustomEvent("solitaire-auth-ready", { detail: window.SolitaireAuth }));
   }
 
