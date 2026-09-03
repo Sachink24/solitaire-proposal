@@ -86,7 +86,6 @@
     if (!sb) return;
     const { data } = await sb.auth.getSession();
     if (data && data.session) {
-      // Already signed in — verify they have a linked, active profile before bouncing forward.
       const ok = await verifyProfile(sb, data.session.user.id);
       if (ok) location.replace(nextPage());
     }
