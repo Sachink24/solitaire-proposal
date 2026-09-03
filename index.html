@@ -108,7 +108,6 @@
         <div class="stat"><div class="n mono">${sanctionCount ?? 0}</div><div class="l">Sanctions on File</div></div>
       `;
     } catch (e) {
-      // invoices table may not exist yet — fail quietly on the dashboard
       statRow.innerHTML = "";
     }
   }
