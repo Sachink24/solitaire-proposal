@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Sanction Letter Generator | Solitaire Finz Mart</title>
+<meta name="robots" content="noindex" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="auth-guard.js" data-page-role="admin"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="shared.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-row">
+    <a href="index.html" class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none"><path d="M16 2 L28 9 V23 L16 30 L4 23 V9 Z" stroke="#C4A672" stroke-width="1.4"/></svg>
+      <div class="brand-text"><div class="name">SOLITAIRE</div><div class="tag">Sanction Letter</div></div>
+    </a>
+    <div class="topbar-actions" id="topbarActions"></div>
+  </div>
+  <div class="tabs">
+    <a class="tab" href="index.html">Dashboard</a>
+    <a class="tab" href="quotation.html">Quotation</a>
+    <a class="tab" href="invoice.html">Invoice</a>
+    <div class="tab active">Sanction Letter</div>
+    <a class="tab" href="credit-report.html">Credit Report</a>
+    <a class="tab" href="legal-report.html">Legal Report</a>
+    <a class="tab" href="technical-report.html">Technical Report</a>
+  </div>
+</div>
+
+<main class="wrap" id="appMain" style="display:none;">
+  <h2 class="section-title">Sanction Letter Generator</h2>
+
+  <div class="panel">
+    <div class="field">
+      <label for="lnInput">LN Number</label>
+      <input id="lnInput" type="text" placeholder="LN-104" autocomplete="off" />
+    </div>
+    <button id="lookupBtn" class="btn btn-ghost" style="width:100%;margin-bottom:4px;" onclick="handleLookup()">Look Up Case</button>
+
+    <div id="preview"></div>
+
+    <button id="genBtn" class="btn btn-gold" style="margin-top:16px;" onclick="handleGenerateClick()" disabled>Generate Sanction Letter PDF</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="panel" style="font-size:11.5px;color:var(--ink-faint);line-height:1.6;">
+    Pulls the final sanction record live from Supabase (<span class="mono">leads</span> + <span class="mono">sanctions</span>)
+    and generates the formal Sanction Letter — applicant address, collateral/property address, sanctioned terms and
+    standard disbursement conditions — separate from the <a href="quotation.html" style="color:var(--gold);">processing-fee Quotation</a>.
+  </div>
+</main>
+
+<div id="notAuthWrap" style="display:none;">
+  <div class="not-authorized">
+    <h2 class="serif">Admin Access Only</h2>
+    <p>This tool is restricted to Admin/Owner accounts. Head back to your own workspace.</p>
+    <div style="margin-top:18px;"><a href="index.html" class="btn btn-gold" style="display:inline-block;">Back to SOLITAIRE</a></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  let currentBundle = null; // { lead, sanction, leadId }
+
+  function waitForAuth() {
+    return new Promise(resolve => {
+      const iv = setInterval(() => {
+        if (window.SolitaireAuth) { clearInterval(iv); resolve(window.SolitaireAuth); }
+      }, 80);
+      setTimeout(() => { clearInterval(iv); resolve(window.SolitaireAuth || null); }, 8000);
+    });
+  }
+
+  async function init() {
+    const auth = await waitForAuth();
+    const role = (auth && auth.profile && auth.profile.role || "").toLowerCase();
+    if (!auth || (role !== "admin" && role !== "owner")) {
+      document.getElementById("notAuthWrap").style.display = "block";
+      return;
+    }
+    document.getElementById("appMain").style.display = "block";
+    document.getElementById("lnInput").addEventListener("keydown", e => { if (e.key === "Enter") handleLookup(); });
+  }
+
+  window.handleLookup = async function handleLookup() {
+    const status = document.getElementById("status");
+    const genBtn = document.getElementById("genBtn");
+    const preview = document.getElementById("preview");
+    const lnRaw = document.getElementById("lnInput").value;
+
+    status.className = ""; status.textContent = "";
+    genBtn.disabled = true;
+    preview.innerHTML = "";
+    currentBundle = null;
+
+    try {
+      const bundle = await SFM.fetchLeadBundle(lnRaw);
+      currentBundle = bundle;
+      const { lead, sanction, leadId } = bundle;
+      const b = lead.borrower || {};
+      const amount = (sanction && sanction.sanction_amount) || lead.credit_loan_amount || lead.loan_amount;
+
+      if (!sanction) {
+        status.className = "error";
+        status.textContent = `No sanction on file yet for ${SFM.lnLabel(leadId)} — nothing to issue.`;
+      } else {
+        status.className = "ok";
+        status.textContent = `${SFM.lnLabel(leadId)} loaded.`;
+        genBtn.disabled = false;
+      }
+
+      preview.innerHTML = `
+        <div class="preview-card">
+          <div class="pk">Applicant</div><div class="pv">${SFM.esc(b.name || "—")}</div>
+          <div class="pk">Loan Type</div><div class="pv">${SFM.esc(lead.loan_type || "—")}</div>
+          <div class="pk">Bank / NBFC</div><div class="pv">${SFM.esc((sanction && sanction.banker) || lead.institution_name || "—")}</div>
+          <div class="pk">Sanctioned Amount</div><div class="pv">${SFM.formatINR(amount)}</div>
+          <div class="pk">Collateral Address</div><div class="pv">${SFM.esc(SFM.collateralAddress(lead))}</div>
+        </div>`;
+    } catch (err) {
+      console.error(err);
+      status.className = "error";
+      status.textContent = "Error: " + err.message;
+    }
+  };
+
+  function buildSanctionLetterHTML({ lead, sanction, leadId }) {
+    const b = lead.borrower || {};
+    const sanctionAmount = sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount;
+    const lnNumber = SFM.lnLabel(leadId);
+    const applicantAddress = SFM.borrowerAddress(lead);
+    const collateralAddress = SFM.collateralAddress(lead);
+    const coApplicants = Array.isArray(lead.co_applicants) ? lead.co_applicants : [];
+
+    return SFM.letterheadOpen("Sanction Ref. No.", sanction.sanction_reference_no || `SFM/SL/${lnNumber}`) + `
+      <div style="font-size:12px; line-height:1.5; margin-bottom:14px;">
+        <b>To,</b><br/>
+        ${SFM.esc(b.name || "[Applicant Name]")}${coApplicants.length ? " &amp; " + SFM.esc(coApplicants.map(c => c.name).filter(Boolean).join(", ")) : ""}<br/>
+        ${SFM.esc(applicantAddress)}<br/>
+        ${SFM.esc(b.mobile || "[Client Contact Number]")}
+      </div>
+
+      <div style="font-size:12px; margin-bottom:12px;">
+        <b>Subject: <u>Sanction of ${SFM.esc(lead.loan_type || "Loan")} Facility – LN ${SFM.esc(String(leadId))}</u></b>
+      </div>
+
+      <div style="font-size:12px; margin-bottom:12px;">Dear Sir / Madam,</div>
+
+      <div style="font-size:12px; line-height:1.6; margin-bottom:14px;">
+        We are pleased to inform you that, based on the details and documents furnished by you and on completion of the
+        Credit, Legal and Technical evaluation of your case, ${SFM.esc((sanction.banker || lead.institution_name) || "the Lender")}
+        has sanctioned your loan application on the following terms and conditions.
+      </div>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Sanctioned Terms</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+        ${SFM.row("Applicant Name", SFM.esc(b.name || "[Applicant Name]"))}
+        ${coApplicants.length ? SFM.row("Co-Applicant(s)", SFM.esc(coApplicants.map(c => c.name).filter(Boolean).join(", "))) : ""}
+        ${SFM.row("Loan Type", SFM.esc(lead.loan_type || "[Loan Type]"))}
+        ${SFM.row("Bank / NBFC", SFM.esc(sanction.banker || lead.institution_name || "[Lender Name]"))}
+        ${sanction.application_no ? SFM.row("Lender Application No.", SFM.esc(sanction.application_no)) : ""}
+        ${SFM.row("Sanctioned Loan Amount", `${SFM.formatINR(sanctionAmount)} (Rupees ${SFM.amountInWords(sanctionAmount)} Only)`)}
+        ${SFM.row("Tenure", sanction.tenure_months ? sanction.tenure_months + " Months" : "[__] Months")}
+        ${SFM.row("Rate of Interest", sanction.roi ? sanction.roi + "% p.a." : "[__]% p.a.")}
+        ${sanction.emi ? SFM.row("Equated Monthly Instalment (EMI)", SFM.formatINR(sanction.emi)) : ""}
+        ${sanction.processing_fee ? SFM.row("Processing Fee", SFM.formatINR(sanction.processing_fee) + " + GST as applicable") : ""}
+        ${sanction.insurance ? SFM.row("Insurance Premium", SFM.formatINR(sanction.insurance)) : ""}
+        ${SFM.row("Sanction Date", SFM.fmtDMY(sanction.sanction_date))}
+      </table>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Collateral / Property Details</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+        ${SFM.row("Collateral Address", SFM.esc(collateralAddress))}
+        ${lead.property && lead.property.type ? SFM.row("Property Type", SFM.esc(lead.property.type)) : ""}
+        ${lead.property && lead.property.value ? SFM.row("Assessed Property Value", SFM.formatINR(lead.property.value)) : ""}
+      </table>
+
+      ${sanction.conditions ? `
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Sanction Conditions</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <div style="font-size:12px; line-height:1.6; margin-bottom:16px;">${SFM.esc(sanction.conditions)}</div>` : ""}
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">General Terms &amp; Conditions</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <ul style="font-size:12px; line-height:1.6; padding-left:18px; margin-bottom:16px; list-style:disc;">
+        <li>This sanction is valid subject to satisfactory completion of all pending documentation, legal/technical clearances and disbursement formalities as required by the Bank/NBFC.</li>
+        <li>Disbursement shall be made directly by the Bank/NBFC, in stages or in full as applicable, subject to the Bank/NBFC's own disbursement policy and any conditions specified above.</li>
+        <li>The rate of interest is subject to change as per the Bank/NBFC's prevailing policy (fixed/floating as applicable) and market conditions, unless otherwise contractually fixed.</li>
+        <li>Any change in sanction terms, loan amount, tenure or rate of interest made by the Bank/NBFC after this letter shall be communicated to you directly by the Bank/NBFC and shall supersede the terms mentioned herein.</li>
+        <li>Solitaire Finz Mart has acted purely as a facilitator/DSA in sourcing and processing this application and is not the lending institution; the loan agreement executed with the Bank/NBFC shall be the final and binding document governing this facility.</li>
+        <li>This sanction letter is valid for a limited period from the date of issue, post which it is subject to revalidation by the Bank/NBFC.</li>
+        <li>Any dispute arising out of this sanction shall be subject to the jurisdiction of courts at Thane, Maharashtra.</li>
+        <li>This letter is confidential and intended solely for the named Applicant(s)/Co-Applicant(s).</li>
+      </ul>
+
+      <div style="font-size:12px; margin-bottom:14px;">
+        Kindly acknowledge receipt and confirm your acceptance of the above sanction terms so that we may proceed with
+        the remaining formalities towards disbursement.
+      </div>
+      <div style="font-size:12px; margin-bottom:14px;">Congratulations, and thank you for choosing Solitaire Finz Mart.</div>
+      <div style="font-size:12px; margin-bottom:40px;">For Solitaire Finz Mart,</div>
+
+      <div style="font-size:13px; font-weight:bold;">Sachin Shivaji Kale</div>
+      <div style="font-size:12px; font-style:italic; color:#555;">Managing Partner</div>
+      <div style="font-size:12px; margin-bottom:20px;">Solitaire Finz Mart</div>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Applicant Acknowledgement</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <div style="font-size:12px; margin-bottom:20px;">I/We have read and accept the above sanction terms and conditions.</div>
+      <div style="font-size:12px; margin-bottom:8px;">Signature: ____________________________</div>
+      <div style="font-size:12px; margin-bottom:8px;">Name: ____________________________</div>
+      <div style="font-size:12px;">Date: ____________________________</div>
+      ` + SFM.letterheadClose();
+  }
+
+  window.handleGenerateClick = async function handleGenerateClick() {
+    const btn = document.getElementById("genBtn");
+    const status = document.getElementById("status");
+    if (!currentBundle || !currentBundle.sanction) {
+      status.className = "error"; status.textContent = "Look up a case with a sanction on file first.";
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      const html = buildSanctionLetterHTML(currentBundle);
+      await SFM.exportHTMLToPDF(html, `Sanction_Letter_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
+      status.className = "ok"; status.textContent = "Sanction Letter PDF generated successfully.";
+    } catch (err) {
+      console.error(err);
+      status.className = "error"; status.textContent = "Error: " + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = "Generate Sanction Letter PDF";
+    }
+  };
+
+  init();
+})();
+</script>
+
+</body>
+</html>

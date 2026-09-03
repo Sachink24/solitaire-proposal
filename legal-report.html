@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Legal Opinion Report Generator | Solitaire Finz Mart</title>
+<meta name="robots" content="noindex" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="shared.css" />
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-config.js"></script>
+<script src="auth-guard.js" data-page-role="admin"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="shared.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-row">
+    <a href="index.html" class="brand">
+      <svg class="brand-mark" viewBox="0 0 32 32" fill="none"><path d="M16 2 L28 9 V23 L16 30 L4 23 V9 Z" stroke="#C4A672" stroke-width="1.4"/></svg>
+      <div class="brand-text"><div class="name">SOLITAIRE</div><div class="tag">Legal Report</div></div>
+    </a>
+    <div class="topbar-actions" id="topbarActions"></div>
+  </div>
+  <div class="tabs">
+    <a class="tab" href="index.html">Dashboard</a>
+    <a class="tab" href="quotation.html">Quotation</a>
+    <a class="tab" href="invoice.html">Invoice</a>
+    <a class="tab" href="sanction-letter.html">Sanction Letter</a>
+    <a class="tab" href="credit-report.html">Credit Report</a>
+    <div class="tab active">Legal Report</div>
+    <a class="tab" href="technical-report.html">Technical Report</a>
+  </div>
+</div>
+
+<main class="wrap" id="appMain" style="display:none;">
+  <h2 class="section-title">Legal Opinion Report Generator</h2>
+
+  <div class="panel">
+    <div class="field">
+      <label for="lnInput">LN Number</label>
+      <input id="lnInput" type="text" placeholder="LN-1001" autocomplete="off" />
+    </div>
+    <button id="lookupBtn" class="btn btn-ghost" style="width:100%;margin-bottom:4px;" onclick="handleLookup()">Look Up Case</button>
+
+    <div id="preview"></div>
+
+    <button id="genBtn" class="btn btn-gold" style="margin-top:16px;" onclick="handleGenerateClick()" disabled>Generate Legal Report PDF</button>
+    <div id="status"></div>
+  </div>
+
+  <div class="panel" style="font-size:11.5px;color:var(--ink-faint);line-height:1.6;">
+    Pulls the submitted Legal Team opinion for this case straight from Supabase
+    (<span class="mono">evaluation_reports</span> where <span class="mono">report_type = 'legal'</span>) and lays it out as a
+    branded PDF — title chain, encumbrance &amp; litigation search, statutory approvals, verification checklist and the
+    advocate's recommendation.
+  </div>
+</main>
+
+<div id="notAuthWrap" style="display:none;">
+  <div class="not-authorized">
+    <h2 class="serif">Admin Access Only</h2>
+    <p>This tool is restricted to Admin/Owner accounts. Head back to your own workspace.</p>
+    <div style="margin-top:18px;"><a href="index.html" class="btn btn-gold" style="display:inline-block;">Back to SOLITAIRE</a></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  let currentLead = null;
+  let currentReport = null;
+  let currentLeadId = null;
+
+  function waitForAuth() {
+    return new Promise(resolve => {
+      const iv = setInterval(() => {
+        if (window.SolitaireAuth) { clearInterval(iv); resolve(window.SolitaireAuth); }
+      }, 80);
+      setTimeout(() => { clearInterval(iv); resolve(window.SolitaireAuth || null); }, 8000);
+    });
+  }
+
+  async function init() {
+    const auth = await waitForAuth();
+    const role = (auth && auth.profile && auth.profile.role || "").toLowerCase();
+    if (!auth || (role !== "admin" && role !== "owner")) {
+      document.getElementById("notAuthWrap").style.display = "block";
+      return;
+    }
+    document.getElementById("appMain").style.display = "block";
+    document.getElementById("lnInput").addEventListener("keydown", e => { if (e.key === "Enter") handleLookup(); });
+  }
+
+  window.handleLookup = async function handleLookup() {
+    const status = document.getElementById("status");
+    const genBtn = document.getElementById("genBtn");
+    const preview = document.getElementById("preview");
+    const lnRaw = document.getElementById("lnInput").value;
+
+    status.className = ""; status.textContent = "";
+    genBtn.disabled = true;
+    preview.innerHTML = "";
+    currentLead = null; currentReport = null; currentLeadId = null;
+
+    try {
+      const leadId = SFM.parseLeadId(lnRaw);
+      if (!leadId) throw new Error("Enter a valid LN number, e.g. LN-1001.");
+      const { lead } = await SFM.fetchLeadBundle(lnRaw);
+      const report = await SFM.fetchEvaluationReport(leadId, "legal");
+
+      currentLead = lead; currentReport = report; currentLeadId = leadId;
+      const b = lead.borrower || {};
+
+      if (!report) {
+        status.className = "error";
+        status.textContent = `No legal report on file yet for ${SFM.lnLabel(leadId)}.`;
+      } else {
+        status.className = "ok";
+        status.textContent = `${SFM.lnLabel(leadId)} legal report loaded (status: ${report.status}).`;
+        genBtn.disabled = false;
+      }
+
+      const d = (report && report.data) || {};
+      preview.innerHTML = `
+        <div class="preview-card">
+          <div class="pk">Applicant</div><div class="pv">${SFM.esc(b.name || "—")}</div>
+          <div class="pk">Loan Type</div><div class="pv">${SFM.esc(lead.loan_type || "—")}</div>
+          <div class="pk">Legal Report Status</div><div class="pv">${report ? SFM.esc(report.status) : "Not submitted"}</div>
+          <div class="pk">Recommendation</div><div class="pv">${SFM.dv(d, "recommendation")}</div>
+          <div class="pk">Title Status</div><div class="pv">${SFM.dv(d, "titleFlow")}</div>
+        </div>`;
+    } catch (err) {
+      console.error(err);
+      status.className = "error";
+      status.textContent = "Error: " + err.message;
+    }
+  };
+
+  function buildLegalReportHTML(lead, report, leadId) {
+    const d = report.data || {};
+    const lnNumber = SFM.lnLabel(leadId);
+
+    return SFM.letterheadOpen("Ref. No.", `SFM/LR/${lnNumber}`) + `
+      <div style="text-align:center; font-family:Cambria, Georgia, serif; font-weight:bold; font-size:17px; letter-spacing:1px; margin-bottom:14px; text-transform:uppercase;">
+        Legal Opinion Report
+      </div>
+
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px;">
+        ${SFM.row("Loan Application No.", SFM.dv(d, "loanAppNo") !== "—" ? SFM.dv(d, "loanAppNo") : lnNumber)}
+        ${SFM.row("Bank / NBFC", SFM.dv(d, "bankName") !== "—" ? SFM.dv(d, "bankName") : SFM.esc(lead.institution_name || "—"))}
+        ${SFM.row("Loan Type", SFM.dv(d, "loanType") !== "—" ? SFM.dv(d, "loanType") : SFM.esc(lead.loan_type || "—"))}
+        ${SFM.row("Report Date", SFM.fmtDMY(d.reportDate))}
+        ${SFM.row("Applicant(s)", SFM.dv(d, "borrowers"))}
+        ${SFM.row("Seller / Vendor", SFM.dv(d, "sellerName"))}
+        ${SFM.row("Property Address", SFM.dv(d, "propertyAddress"))}
+        ${SFM.row("Advocate", `${SFM.dv(d, "advocateName")} (Enrolment No. ${SFM.dv(d, "advocateEnrollmentNo")})`)}
+      </table>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Title &amp; Ownership</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px;">
+        ${SFM.fieldRows(d, [
+          ["Ownership Type", "ownershipType"],
+          ["Property Classification", "propertyClass"],
+          ["Title Flow / Chain", "titleFlow"],
+          ["Root of Title (Years)", "rootOfTitleYears"],
+          ["Title Defects", "titleDefects"],
+          ["Registration Completed", "registrationCompleted"],
+          ["Stamp Duty Paid", "stampDutyPaid"],
+          ["Revenue Records Match", "revenueRecordsMatch"],
+        ])}
+      </table>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Search, Encumbrance &amp; Litigation</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px;">
+        ${SFM.fieldRows(d, [
+          ["Search Agency", "searchAgency"],
+          ["Search Period (Years)", "searchPeriodYears"],
+          ["EC Period (Years)", "ecPeriod"],
+          ["Court Search Done", "courtSearchDone"],
+          ["Encumbrance Found", "encumbranceFound"],
+          ["Encumbrance Details", "encumbranceDetails"],
+          ["Litigation Pending", "litigationPending"],
+          ["Litigation Details", "litigationDetails"],
+        ])}
+      </table>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Statutory &amp; Regulatory Approvals</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px;">
+        ${SFM.fieldRows(d, [
+          ["Municipal Approval Status", "municipalApprovalStatus"],
+          ["Society NOC Status", "societyNocStatus"],
+          ["RERA Status", "reraStatus"],
+          ["CERSAI Registration", "cersaiRegistration"],
+        ])}
+      </table>
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Risk Assessment</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px;">
+        ${SFM.fieldRows(d, [
+          ["Risk Level", "riskLevel"],
+          ["Risk Factors", "riskFactors"],
+          ["CIBIL Score", "cibilScore"],
+        ])}
+      </table>
+
+      ${SFM.verifyChecklistRows(d) ? `
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Verification Checklist</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      ${SFM.verifyChecklistRows(d)}` : ""}
+
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:14px; margin-bottom:4px;">Opinion &amp; Recommendation</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:8px;"></div>
+      <div style="font-size:12px; line-height:1.6; margin-bottom:8px;"><b>Remarks:</b> ${SFM.dv(d, "remarks")}</div>
+      <div style="font-size:12px; line-height:1.6; margin-bottom:8px;"><b>Conditions:</b> ${SFM.dv(d, "conditions")}</div>
+      <div style="font-size:12px; line-height:1.6; margin-bottom:8px;"><b>Conclusion:</b> ${SFM.dv(d, "conclusion")}</div>
+      <div style="font-size:12px; line-height:1.6; margin-bottom:20px;"><b>Recommendation:</b> ${SFM.dv(d, "recommendation")}</div>
+
+      <div style="font-size:12px; margin-bottom:40px;">For Solitaire Finz Mart — Legal Team,</div>
+      <div style="font-size:13px; font-weight:bold;">${SFM.dv(d, "advocateName")}</div>
+      <div style="font-size:12px; font-style:italic; color:#555;">Advocate${d.advocateEnrollmentNo ? " · Enrolment No. " + SFM.esc(d.advocateEnrollmentNo) : ""}</div>
+      <div style="font-size:11px; color:#777; margin-top:4px;">Submitted by ${SFM.esc(report.submitted_by || "—")}${report.approved_at ? `, approved by ${SFM.esc(report.approved_by || "—")} on ${SFM.fmtDMY(report.approved_at)}` : ""}</div>
+      ` + SFM.letterheadClose("Solitaire Finz Mart | Internal Legal Opinion Report — Confidential");
+  }
+
+  window.handleGenerateClick = async function handleGenerateClick() {
+    const btn = document.getElementById("genBtn");
+    const status = document.getElementById("status");
+    if (!currentLead || !currentReport) {
+      status.className = "error"; status.textContent = "Look up a case with a legal report on file first.";
+      return;
+    }
+    btn.disabled = true; btn.textContent = "Generating…";
+    try {
+      const html = buildLegalReportHTML(currentLead, currentReport, currentLeadId);
+      await SFM.exportHTMLToPDF(html, `Legal_Report_${SFM.lnLabel(currentLeadId)}.pdf`);
+      status.className = "ok"; status.textContent = "Legal Report PDF generated successfully.";
+    } catch (err) {
+      console.error(err);
+      status.className = "error"; status.textContent = "Error: " + err.message;
+    } finally {
+      btn.disabled = false; btn.textContent = "Generate Legal Report PDF";
+    }
+  };
+
+  init();
+})();
+</script>
+
+</body>
+</html>
