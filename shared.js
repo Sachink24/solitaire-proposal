@@ -69,6 +69,34 @@ const SFM = (function () {
   }
 
   /* ---------------------------------------------------------------------
+     EVALUATION REPORT FETCH — Legal / Technical / Credit reports live in
+     one shared table, differentiated by report_type. Schema confirmed live
+     from Supabase (project nbpvamrwzqrgoiwpadwc):
+       evaluation_reports: id, report_type ('legal'|'technical'|'credit'),
+         lead_id (FK), loan_app_no, status, data (jsonb — see field maps in
+         each report page), signature_path, submitted_by, submitted_at,
+         approved_by, approved_at, version
+     Pulls the latest row (highest version, then most recent submission) for
+     a given lead + report type.
+     --------------------------------------------------------------------- */
+  async function fetchEvaluationReport(leadId, reportType) {
+    const sb = window.SolitaireDB && window.SolitaireDB.sb;
+    if (!sb) throw new Error("Not connected — supabase-config.js / auth-guard.js not loaded.");
+
+    const { data: rows, error } = await sb
+      .from("evaluation_reports")
+      .select("*")
+      .eq("lead_id", leadId)
+      .eq("report_type", reportType)
+      .order("version", { ascending: false })
+      .order("submitted_at", { ascending: false, nullsFirst: false })
+      .limit(1);
+
+    if (error) throw error;
+    return (rows && rows[0]) || null;
+  }
+
+  /* ---------------------------------------------------------------------
      FORMAT HELPERS
      --------------------------------------------------------------------- */
   function esc(s) {
@@ -120,6 +148,65 @@ const SFM = (function () {
     const b = (lead && lead.borrower) || {};
     const parts = [b.location, b.pincode].filter(Boolean);
     return parts.join(" - ") || "[Client Address]";
+  }
+
+  /* Collateral/property address — used on the Sanction Letter, distinct
+     from the applicant's own address above. Falls back to the evaluation
+     report's free-text propertyAddress if lead.property isn't filled in. */
+  function collateralAddress(lead, reportData) {
+    const p = (lead && lead.property) || {};
+    const fromLead = [p.address, p.city, p.state, p.pincode].filter(Boolean).join(", ");
+    if (fromLead) return fromLead;
+    if (reportData && reportData.propertyAddress) return reportData.propertyAddress;
+    return "[Collateral / Property Address]";
+  }
+
+  /* Pulls a value out of an evaluation_report's `data` jsonb blob, with a
+     fallback chain (some reports store the same fact under a couple of
+     historical key names). Returns "" (not a placeholder) so callers can
+     decide how to render a blank — use dv() below when you want the
+     bracketed placeholder instead. */
+  function pick(data, ...keys) {
+    const d = data || {};
+    for (const k of keys) {
+      if (d[k] !== undefined && d[k] !== null && d[k] !== "") return d[k];
+    }
+    return "";
+  }
+
+  function dv(data, ...keys) {
+    const v = pick(data, ...keys);
+    return v === "" ? "—" : esc(v);
+  }
+
+  /* Renders a table of {label, value} rows, skipping any row whose value
+     resolves to nothing — keeps generated reports free of empty "—" rows
+     for fields a particular officer didn't fill in. Pass skipEmpty:false
+     to force a row to always show (e.g. mandatory fields). */
+  function fieldRows(data, defs) {
+    return defs.map(([label, ...keys]) => {
+      const v = pick(data, ...keys);
+      if (v === "") return "";
+      return row(label, esc(v));
+    }).join("");
+  }
+
+  /* Renders the verify_0..verify_N checklist objects ({status, remarks})
+     that admin.html's field-verification widget writes into `data`. There's
+     no stored label per item (the label lives in the form UI, not the DB),
+     so items are numbered; any officer remarks are shown alongside. */
+  function verifyChecklistRows(data) {
+    const items = [];
+    let i = 0;
+    while (data && Object.prototype.hasOwnProperty.call(data, "verify_" + i)) {
+      const v = data["verify_" + i] || {};
+      const statusLabel = (v.status || "pending").replace(/^\w/, c => c.toUpperCase());
+      const remarks = v.remarks ? ` — ${esc(v.remarks)}` : "";
+      items.push(`<li>Verification Point ${i + 1}: <b>${esc(statusLabel)}</b>${remarks}</li>`);
+      i++;
+    }
+    if (!items.length) return "";
+    return `<ul style="font-size:11.5px; line-height:1.6; padding-left:18px; margin:0 0 14px; list-style:disc; columns:2; column-gap:24px;">${items.join("")}</ul>`;
   }
 
   /* ---------------------------------------------------------------------
@@ -244,8 +331,8 @@ const SFM = (function () {
   }
 
   return {
-    parseLeadId, lnLabel, fetchLeadBundle, esc, formatINR, amountInWords,
-    todayDMY, fmtDMY, borrowerAddress, exportHTMLToPDF,
-    letterheadOpen, letterheadClose, row,
+    parseLeadId, lnLabel, fetchLeadBundle, fetchEvaluationReport, esc, formatINR, amountInWords,
+    todayDMY, fmtDMY, borrowerAddress, collateralAddress, pick, dv, fieldRows, verifyChecklistRows,
+    exportHTMLToPDF, letterheadOpen, letterheadClose, row,
   };
 })();
