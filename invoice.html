@@ -15,6 +15,7 @@
 <script src="supabase-config.js"></script>
 <script src="auth-guard.js" data-page-role="admin"></script>
 
+<!-- PDF libraries: load standalone globals used by shared.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="shared.js"></script>
@@ -55,32 +56,23 @@
           <input id="feeInput" type="number" step="0.01" />
         </div>
         <div class="field">
+          <label for="discountInput">Discount (₹, optional)</label>
+          <input id="discountInput" type="number" step="0.01" min="0" value="0" />
+        </div>
+        <div class="field">
           <label for="gstInput">GST Rate (%)</label>
           <input id="gstInput" type="number" step="0.01" value="18" />
         </div>
         <div class="field">
-          <label for="modeInput">Payment Mode</label>
-          <select id="modeInput">
-            <option value="">— Select —</option>
-            <option>Bank Transfer / NEFT / RTGS</option>
-            <option>UPI</option>
-            <option>Cheque</option>
-            <option>Cash</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="refInput">Payment Reference No.</label>
-          <input id="refInput" type="text" placeholder="UTR / Cheque No." />
-        </div>
-        <div class="field full">
-          <label for="statusInput">Status</label>
-          <select id="statusInput">
-            <option value="unpaid">Unpaid (issue as due)</option>
-            <option value="paid">Paid (payment already received)</option>
-          </select>
+          <label for="dueDateInput">Payment Due Date / Time Frame</label>
+          <input id="dueDateInput" type="date" />
         </div>
       </div>
       <div class="preview-card" id="totalsPreview"></div>
+      <div style="font-size:11px;color:var(--ink-faint);margin-top:6px;">
+        Invoices are issued as <span class="mono">unpaid</span>. Once saved, record payments (in full or in
+        parts) against it below in the ledger.
+      </div>
     </div>
 
     <button id="genBtn" class="btn btn-gold" style="margin-top:16px;" onclick="handleGenerateClick()" disabled>Save &amp; Generate Invoice PDF</button>
@@ -92,11 +84,18 @@
     <div id="ledgerWrap"><div class="empty-state">Loading…</div></div>
   </div>
 
+  <div class="panel" id="paymentPanelWrap" style="display:none;">
+    <h2 class="section-title" style="font-size:18px;" id="paymentPanelTitle">Payment Ledger</h2>
+    <div id="paymentPanelBody"></div>
+  </div>
+
   <div class="panel" style="font-size:11.5px;color:var(--ink-faint);line-height:1.6;">
     Invoices are numbered sequentially (<span class="mono">SFM/INV/2026-27/0001</span> style) and saved to the
     <span class="mono">invoices</span> table so numbering never collides and every invoice is re-downloadable
-    later. Run <span class="mono">sql/001_invoices_table.sql</span> once against your Supabase project before
-    using this page for the first time.
+    later. Part payments are tracked in <span class="mono">invoice_payments</span> — click any row below to
+    record a payment or reprint the invoice with the payment history included. Run
+    <span class="mono">sql/001_invoices_table.sql</span> then <span class="mono">sql/002_invoice_discount_payments.sql</span>
+    once against your Supabase project before using this page for the first time.
   </div>
 </main>
 
@@ -132,22 +131,32 @@
     sb = window.SolitaireDB && window.SolitaireDB.sb;
     document.getElementById("appMain").style.display = "block";
     document.getElementById("lnInput").addEventListener("keydown", e => { if (e.key === "Enter") handleLookup(); });
-    ["feeInput", "gstInput"].forEach(id => document.getElementById(id).addEventListener("input", updateTotals));
+    ["feeInput", "discountInput", "gstInput"].forEach(id => document.getElementById(id).addEventListener("input", updateTotals));
     await loadLedger();
+  }
+
+  function addDays(n) {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return d.toISOString().slice(0, 10);
   }
 
   function currentTotals() {
     const fee = Number(document.getElementById("feeInput").value) || 0;
+    const discount = Math.min(Number(document.getElementById("discountInput").value) || 0, fee);
     const gstRate = Number(document.getElementById("gstInput").value) || 0;
-    const gst = +(fee * gstRate / 100).toFixed(2);
-    const total = +(fee + gst).toFixed(2);
-    return { fee, gstRate, gst, total };
+    const taxable = +(fee - discount).toFixed(2);
+    const gst = +(taxable * gstRate / 100).toFixed(2);
+    const total = +(taxable + gst).toFixed(2);
+    return { fee, discount, gstRate, taxable, gst, total };
   }
 
   function updateTotals() {
-    const { fee, gstRate, gst, total } = currentTotals();
+    const { fee, discount, gstRate, taxable, gst, total } = currentTotals();
     document.getElementById("totalsPreview").innerHTML = `
       <div class="pk">Processing Fee</div><div class="pv">${SFM.formatINR(fee)}</div>
+      <div class="pk">Discount</div><div class="pv">${discount ? "− " + SFM.formatINR(discount) : "—"}</div>
+      <div class="pk">Taxable Amount</div><div class="pv">${SFM.formatINR(taxable)}</div>
       <div class="pk">GST @ ${gstRate}%</div><div class="pv">${SFM.formatINR(gst)}</div>
       <div class="pk">Total Payable</div><div class="pv" style="font-weight:700;color:var(--gold-bright);">${SFM.formatINR(total)}</div>
     `;
@@ -184,6 +193,8 @@
         </div>`;
 
       document.getElementById("feeInput").value = sanction && sanction.processing_fee ? Number(sanction.processing_fee) : "";
+      document.getElementById("discountInput").value = 0;
+      document.getElementById("dueDateInput").value = addDays(7);
       document.getElementById("invoiceForm").style.display = "block";
       updateTotals();
       genBtn.disabled = false;
@@ -194,10 +205,15 @@
     }
   };
 
+  /* -----------------------------------------------------------------------
+     Sequential invoice numbering, financial-year style: SFM/INV/2026-27/0001
+     Derives the next sequence from the count of invoices already issued in
+     the current FY (Apr–Mar), matching common Indian invoicing convention.
+     ----------------------------------------------------------------------- */
   function currentFY() {
     const d = new Date();
     const y = d.getFullYear();
-    const startYear = d.getMonth() >= 3 ? y : y - 1;
+    const startYear = d.getMonth() >= 3 ? y : y - 1; // FY starts April
     return `${startYear}-${String((startYear + 1) % 100).padStart(2, "0")}`;
   }
 
@@ -212,9 +228,38 @@
     return { invoiceNo: `SFM/INV/${fy}/${String(seq).padStart(4, "0")}`, fy };
   }
 
-  function buildInvoiceHTML({ lead, sanction, leadId }, invoiceNo, totals, meta) {
+  function buildInvoiceHTML({ lead, sanction, leadId }, invoiceNo, totals, meta, payments) {
     const b = lead.borrower || {};
     const lnNumber = SFM.lnLabel(leadId);
+    payments = payments || [];
+
+    const paidSoFar = +payments.reduce((sum, p) => sum + Number(p.amount || 0), 0).toFixed(2);
+    const balanceDue = +(totals.total - paidSoFar).toFixed(2);
+    const payStatus = balanceDue <= 0 ? "paid" : paidSoFar > 0 ? "partially_paid" : "unpaid";
+    const statusLabel = payStatus === "paid"
+      ? `<span style="color:#2E7D32; font-weight:bold;">PAID IN FULL</span>`
+      : payStatus === "partially_paid"
+        ? `<span style="color:#B45309; font-weight:bold;">PARTIALLY PAID</span>`
+        : `<span style="color:#B45309; font-weight:bold;">UNPAID / DUE</span>`;
+
+    const paymentHistoryBlock = payments.length ? `
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Payment History</div>
+      <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+        <tr>
+          <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Date</th>
+          <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Mode</th>
+          <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Reference</th>
+          <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:right;">Amount</th>
+        </tr>
+        ${payments.map(p => `
+        <tr>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.fmtDMY(p.payment_date)}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.mode || "—")}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.reference || "—")}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">${SFM.formatINR(p.amount)}</td>
+        </tr>`).join("")}
+      </table>` : "";
 
     return SFM.letterheadOpen("Invoice No.", invoiceNo) + `
       <div style="text-align:center; font-family:Cambria, Georgia, serif; font-size:18px; font-weight:bold; letter-spacing:1px; margin-bottom:16px;">
@@ -244,6 +289,11 @@
           </td>
           <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">${SFM.formatINR(totals.fee)}</td>
         </tr>
+        ${totals.discount ? `
+        <tr>
+          <td style="border:1px solid #ddd; padding:6px 10px;">Discount</td>
+          <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">− ${SFM.formatINR(totals.discount)}</td>
+        </tr>` : ""}
         <tr>
           <td style="border:1px solid #ddd; padding:6px 10px;">GST @ ${totals.gstRate}%</td>
           <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">${SFM.formatINR(totals.gst)}</td>
@@ -259,9 +309,15 @@
       </div>
 
       <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
-        ${SFM.row("Payment Status", meta.status === "paid" ? `<span style="color:#2E7D32; font-weight:bold;">PAID</span>` : `<span style="color:#B45309; font-weight:bold;">UNPAID / DUE</span>`)}
-        ${meta.mode ? SFM.row("Payment Mode", SFM.esc(meta.mode)) : ""}
-        ${meta.ref ? SFM.row("Payment Reference", SFM.esc(meta.ref)) : ""}
+        ${SFM.row("Payment Status", statusLabel)}
+        ${meta.dueDate ? SFM.row("Payment Due Date", SFM.fmtDMY(meta.dueDate)) : ""}
+      </table>
+
+      ${paymentHistoryBlock}
+
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+        ${SFM.row("Amount Paid", SFM.formatINR(paidSoFar))}
+        ${SFM.row("Balance Due", `<b style="color:${balanceDue > 0 ? "#B45309" : "#2E7D32"};">${SFM.formatINR(balanceDue)}</b>`)}
       </table>
 
       <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Bank Details for Payment</div>
@@ -294,11 +350,7 @@
     const totals = currentTotals();
     if (!totals.fee) { status.className = "error"; status.textContent = "Enter a processing fee amount."; return; }
 
-    const meta = {
-      mode: document.getElementById("modeInput").value,
-      ref: document.getElementById("refInput").value.trim(),
-      status: document.getElementById("statusInput").value,
-    };
+    const meta = { dueDate: document.getElementById("dueDateInput").value || null };
 
     btn.disabled = true; btn.textContent = "Saving…";
     status.className = ""; status.textContent = "";
@@ -316,30 +368,30 @@
         loan_type: lead.loan_type || null,
         banker: (currentBundle.sanction && currentBundle.sanction.banker) || lead.institution_name || null,
         processing_fee: totals.fee,
+        discount_amount: totals.discount,
         gst_rate: totals.gstRate,
         gst_amount: totals.gst,
         total_amount: totals.total,
-        status: meta.status,
-        payment_mode: meta.mode || null,
-        payment_ref: meta.ref || null,
-        paid_at: meta.status === "paid" ? new Date().toISOString() : null,
+        due_date: meta.dueDate,
+        status: "unpaid",
         created_by: (window.SolitaireAuth && window.SolitaireAuth.profile && window.SolitaireAuth.profile.email) || null,
       };
 
-      const { error: insertErr } = await sb.from("invoices").insert(payload);
+      const { data: inserted, error: insertErr } = await sb.from("invoices").insert(payload).select("id").single();
       if (insertErr) throw insertErr;
 
       btn.textContent = "Generating PDF…";
-      const html = buildInvoiceHTML(currentBundle, invoiceNo, totals, meta);
+      const html = buildInvoiceHTML(currentBundle, invoiceNo, totals, meta, []);
       await SFM.exportHTMLToPDF(html, `Invoice_${invoiceNo.replace(/\//g, "-")}.pdf`);
 
       status.className = "ok";
-      status.textContent = `${invoiceNo} saved and PDF generated.`;
+      status.textContent = `${invoiceNo} saved and PDF generated. Record payments for it below.`;
       await loadLedger();
+      if (inserted && inserted.id) await openPaymentPanel(inserted.id);
     } catch (err) {
       console.error(err);
       status.className = "error";
-      status.textContent = "Error: " + err.message + (String(err.message || "").includes("relation") ? " — has sql/001_invoices_table.sql been run yet?" : "");
+      status.textContent = "Error: " + err.message + (String(err.message || "").includes("relation") ? " — have both sql/001_invoices_table.sql and sql/002_invoice_discount_payments.sql been run yet?" : "");
     } finally {
       btn.disabled = false; btn.textContent = "Save & Generate Invoice PDF";
     }
@@ -348,9 +400,9 @@
   async function loadLedger() {
     const wrap = document.getElementById("ledgerWrap");
     if (!sb) return;
-    const { data, error } = await sb.from("invoices").select("*").order("created_at", { ascending: false }).limit(25);
+    const { data, error } = await sb.from("invoice_summary").select("*").order("created_at", { ascending: false }).limit(25);
     if (error) {
-      wrap.innerHTML = `<div class="empty-state">Couldn't load invoices — has sql/001_invoices_table.sql been run yet?</div>`;
+      wrap.innerHTML = `<div class="empty-state">Couldn't load invoices — have both migrations in sql/ been run yet?</div>`;
       return;
     }
     if (!data || !data.length) {
@@ -358,17 +410,186 @@
       return;
     }
     wrap.innerHTML = `<table class="ledger"><thead><tr>
-        <th>Invoice No.</th><th>Applicant</th><th>LN</th><th>Total</th><th>Status</th>
+        <th>Invoice No.</th><th>Applicant</th><th>LN</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>
       </tr></thead><tbody>
-      ${data.map(inv => `<tr>
+      ${data.map(inv => `<tr style="cursor:pointer;" onclick="openPaymentPanel(${inv.id})">
         <td data-label="Invoice No." class="mono">${SFM.esc(inv.invoice_no)}</td>
         <td data-label="Applicant">${SFM.esc(inv.applicant_name || "—")}</td>
         <td data-label="LN" class="mono">${SFM.esc(SFM.lnLabel(inv.lead_id))}</td>
         <td data-label="Total">${SFM.formatINR(inv.total_amount)}</td>
-        <td data-label="Status"><span class="badge b-${SFM.esc(inv.status)}">${SFM.esc(inv.status)}</span></td>
+        <td data-label="Paid">${SFM.formatINR(inv.paid_amount)}</td>
+        <td data-label="Balance">${SFM.formatINR(inv.balance_due)}</td>
+        <td data-label="Status"><span class="badge b-${SFM.esc(inv.status)}">${SFM.esc(inv.status).replace("_", " ")}</span></td>
       </tr>`).join("")}
       </tbody></table>`;
   }
+
+  /* -----------------------------------------------------------------------
+     Part-payment ledger — click any invoice row to open this panel, record
+     a payment against it (in full or in parts), and reprint the invoice
+     PDF with the running payment history and balance due included.
+     ----------------------------------------------------------------------- */
+  let activeInvoiceId = null;
+
+  window.openPaymentPanel = async function openPaymentPanel(invoiceId) {
+    activeInvoiceId = invoiceId;
+    const wrap = document.getElementById("paymentPanelWrap");
+    const body = document.getElementById("paymentPanelBody");
+    wrap.style.display = "block";
+    body.innerHTML = `<div class="empty-state">Loading…</div>`;
+    wrap.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    try {
+      const { data: inv, error: invErr } = await sb.from("invoices").select("*").eq("id", invoiceId).single();
+      if (invErr) throw invErr;
+      const { data: payments, error: payErr } = await sb
+        .from("invoice_payments")
+        .select("*")
+        .eq("invoice_id", invoiceId)
+        .order("payment_date", { ascending: false });
+      if (payErr) throw payErr;
+
+      renderPaymentPanel(inv, payments || []);
+    } catch (err) {
+      console.error(err);
+      body.innerHTML = `<div class="empty-state">Error loading payment ledger: ${SFM.esc(err.message)}</div>`;
+    }
+  };
+
+  function renderPaymentPanel(inv, payments) {
+    document.getElementById("paymentPanelTitle").textContent = `Payment Ledger — ${inv.invoice_no}`;
+    const paid = +payments.reduce((s, p) => s + Number(p.amount || 0), 0).toFixed(2);
+    const balance = +(inv.total_amount - paid).toFixed(2);
+
+    document.getElementById("paymentPanelBody").innerHTML = `
+      <div class="preview-card">
+        <div class="pk">Applicant</div><div class="pv">${SFM.esc(inv.applicant_name || "—")}</div>
+        <div class="pk">Total Payable</div><div class="pv">${SFM.formatINR(inv.total_amount)}</div>
+        <div class="pk">Paid So Far</div><div class="pv">${SFM.formatINR(paid)}</div>
+        <div class="pk">Balance Due</div><div class="pv" style="font-weight:700;color:${balance > 0 ? "#B45309" : "#2E7D32"};">${SFM.formatINR(balance)}</div>
+        ${inv.due_date ? `<div class="pk">Due Date</div><div class="pv">${SFM.fmtDMY(inv.due_date)}</div>` : ""}
+      </div>
+
+      ${payments.length ? `
+      <table class="ledger" style="margin-top:14px;"><thead><tr>
+          <th>Date</th><th>Amount</th><th>Mode</th><th>Reference</th><th>Notes</th>
+        </tr></thead><tbody>
+        ${payments.map(p => `<tr>
+          <td data-label="Date">${SFM.fmtDMY(p.payment_date)}</td>
+          <td data-label="Amount">${SFM.formatINR(p.amount)}</td>
+          <td data-label="Mode">${SFM.esc(p.mode || "—")}</td>
+          <td data-label="Reference" class="mono">${SFM.esc(p.reference || "—")}</td>
+          <td data-label="Notes">${SFM.esc(p.notes || "—")}</td>
+        </tr>`).join("")}
+        </tbody></table>` : `<div class="empty-state" style="margin-top:14px;">No payments recorded yet.</div>`}
+
+      ${balance > 0 ? `
+      <div class="field-grid" style="margin-top:16px;">
+        <div class="field">
+          <label for="payAmountInput">Payment Amount (₹)</label>
+          <input id="payAmountInput" type="number" step="0.01" min="0.01" max="${balance}" value="${balance}" />
+        </div>
+        <div class="field">
+          <label for="payDateInput">Payment Date</label>
+          <input id="payDateInput" type="date" value="${new Date().toISOString().slice(0,10)}" />
+        </div>
+        <div class="field">
+          <label for="payModeInput">Payment Mode</label>
+          <select id="payModeInput">
+            <option value="">— Select —</option>
+            <option>Bank Transfer / NEFT / RTGS</option>
+            <option>UPI</option>
+            <option>Cheque</option>
+            <option>Cash</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="payRefInput">Reference No.</label>
+          <input id="payRefInput" type="text" placeholder="UTR / Cheque No." />
+        </div>
+        <div class="field full">
+          <label for="payNotesInput">Notes (optional)</label>
+          <input id="payNotesInput" type="text" placeholder="e.g. 1st installment" />
+        </div>
+      </div>
+      <button class="btn btn-gold" style="margin-top:12px;" onclick="handleAddPayment(${inv.id})">Record Payment</button>
+      ` : `<div style="margin-top:16px;color:#2E7D32;font-weight:600;font-size:13px;">Invoice fully paid.</div>`}
+
+      <button class="btn btn-ghost" style="margin-top:12px;" onclick="handleReprintInvoice(${inv.id})">Download Invoice PDF (with payment history)</button>
+      <div id="paymentPanelStatus"></div>
+    `;
+  }
+
+  window.handleAddPayment = async function handleAddPayment(invoiceId) {
+    const status = document.getElementById("paymentPanelStatus");
+    const amount = Number(document.getElementById("payAmountInput").value) || 0;
+    if (amount <= 0) { status.className = "error"; status.textContent = "Enter a valid payment amount."; return; }
+
+    const payload = {
+      invoice_id: invoiceId,
+      amount,
+      payment_date: document.getElementById("payDateInput").value || new Date().toISOString().slice(0, 10),
+      mode: document.getElementById("payModeInput").value || null,
+      reference: document.getElementById("payRefInput").value.trim() || null,
+      notes: document.getElementById("payNotesInput").value.trim() || null,
+      created_by: (window.SolitaireAuth && window.SolitaireAuth.profile && window.SolitaireAuth.profile.email) || null,
+    };
+
+    try {
+      const { error: payErr } = await sb.from("invoice_payments").insert(payload);
+      if (payErr) throw payErr;
+
+      // Recompute status on the invoice row so it's correct even outside this page
+      const { data: inv } = await sb.from("invoices").select("total_amount").eq("id", invoiceId).single();
+      const { data: allPayments } = await sb.from("invoice_payments").select("amount").eq("invoice_id", invoiceId);
+      const paidTotal = (allPayments || []).reduce((s, p) => s + Number(p.amount || 0), 0);
+      const newStatus = paidTotal >= Number(inv.total_amount) ? "paid" : paidTotal > 0 ? "partially_paid" : "unpaid";
+      await sb.from("invoices").update({ status: newStatus }).eq("id", invoiceId);
+
+      await openPaymentPanel(invoiceId);
+      await loadLedger();
+    } catch (err) {
+      console.error(err);
+      status.className = "error";
+      status.textContent = "Error: " + err.message;
+    }
+  };
+
+  window.handleReprintInvoice = async function handleReprintInvoice(invoiceId) {
+    const status = document.getElementById("paymentPanelStatus");
+    status.className = ""; status.textContent = "Preparing PDF…";
+    try {
+      const { data: inv, error: invErr } = await sb.from("invoices").select("*").eq("id", invoiceId).single();
+      if (invErr) throw invErr;
+      const { data: payments, error: payErr } = await sb
+        .from("invoice_payments")
+        .select("*")
+        .eq("invoice_id", invoiceId)
+        .order("payment_date", { ascending: true });
+      if (payErr) throw payErr;
+
+      const bundle = await SFM.fetchLeadBundle(SFM.lnLabel(inv.lead_id));
+      // Prefer the invoice's own recorded banker (it may differ from the lead's current sanction)
+      const sanctionForPdf = Object.assign({}, bundle.sanction, { banker: inv.banker || (bundle.sanction && bundle.sanction.banker) });
+
+      const totals = {
+        fee: Number(inv.processing_fee),
+        discount: Number(inv.discount_amount) || 0,
+        gstRate: Number(inv.gst_rate),
+        gst: Number(inv.gst_amount),
+        total: Number(inv.total_amount),
+      };
+      const meta = { dueDate: inv.due_date };
+
+      const html = buildInvoiceHTML({ lead: bundle.lead, sanction: sanctionForPdf, leadId: inv.lead_id }, inv.invoice_no, totals, meta, payments || []);
+      await SFM.exportHTMLToPDF(html, `Invoice_${inv.invoice_no.replace(/\//g, "-")}.pdf`);
+      status.className = "ok"; status.textContent = "PDF generated.";
+    } catch (err) {
+      console.error(err);
+      status.className = "error";
+      status.textContent = "Error: " + err.message;
+    }
+  };
 
   init();
 })();
