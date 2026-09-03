@@ -1,5 +1,19 @@
+/* ============================================================================
+   SOLITAIRE — Shared helpers for Quotation & Invoice generators
+   Depends on supabase-config.js + auth-guard.js already being loaded
+   (same files used by admin.html / credit.html / legal.html / technical.html
+   in the SOLITAIRE-Legal-Technical-Credit repo). This file assumes
+   window.SolitaireDB.sb is the authenticated Supabase client.
+   ========================================================================== */
+
 const SFM = (function () {
 
+  /* ---------------------------------------------------------------------
+     LN NUMBER PARSING
+     LN numbers are NOT a stored column — admin.html builds them on the fly
+     as "LN-" + leads.id (see renderCaseTable in admin.html). So "LN-104",
+     "ln104", "104" all resolve to leads.id = 104.
+     --------------------------------------------------------------------- */
   function parseLeadId(input) {
     const clean = String(input || "").trim();
     if (!clean) return null;
@@ -12,6 +26,19 @@ const SFM = (function () {
     return "LN-" + id;
   }
 
+  /* ---------------------------------------------------------------------
+     DATA FETCH — pulls the lead + its latest sanction record.
+     Schema confirmed from admin.html:
+       leads: id, borrower(jsonb: name, mobile, location, pincode, email),
+              co_applicants(jsonb), property(jsonb: address, city, state, pincode),
+              loan_type, loan_amount, institution_name, stage, status,
+              credit_loan_amount, credit_term_months, credit_roi,
+              credit_fees, credit_conditions
+       sanctions: lead_id (unique, FK), application_no, sanction_amount,
+              tenure_months, roi, emi, processing_fee, insurance, banker,
+              sanction_reference_no, sanction_date, final_remarks, status,
+              approved_by, approved_at
+     --------------------------------------------------------------------- */
   async function fetchLeadBundle(leadIdOrLN) {
     const sb = window.SolitaireDB && window.SolitaireDB.sb;
     if (!sb) throw new Error("Not connected — supabase-config.js / auth-guard.js not loaded.");
@@ -41,6 +68,9 @@ const SFM = (function () {
     return { lead, sanction, leadId };
   }
 
+  /* ---------------------------------------------------------------------
+     FORMAT HELPERS
+     --------------------------------------------------------------------- */
   function esc(s) {
     return (s == null ? "" : s + "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   }
@@ -92,6 +122,10 @@ const SFM = (function () {
     return parts.join(" - ") || "[Client Address]";
   }
 
+  /* ---------------------------------------------------------------------
+     PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses standalone
+     html2canvas + jsPDF globals loaded by quotation.html/invoice.html.
+     --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
     if (typeof window.html2canvas !== "function") {
       throw new Error("html2canvas failed to load. Please refresh the page and try again.");
@@ -100,6 +134,10 @@ const SFM = (function () {
       throw new Error("jsPDF failed to load. Please refresh the page and try again.");
     }
 
+    // Render fully on-screen (not off-canvas at left:-9999px) — some browsers
+    // skip layout/paint for elements positioned far outside the viewport,
+    // which produces a blank canvas even though the download still "succeeds".
+    // Covered by an opaque white overlay so it doesn't look broken.
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
@@ -168,6 +206,9 @@ const SFM = (function () {
     }
   }
 
+  /* ---------------------------------------------------------------------
+     BRANDED LETTERHEAD (shared header/footer used by both documents)
+     --------------------------------------------------------------------- */
   function letterheadOpen(refLabel, refValue) {
     return `
     <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 30px 36px; max-width: 780px; background:#fff;">
