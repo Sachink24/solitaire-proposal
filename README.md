@@ -7,15 +7,36 @@ from Supabase by LN number and generates a branded **Sanction Quotation**
 ## Files
 
 ```
-index.html            Dashboard — links to Quotation & Invoice, shows quick stats
-quotation.html         Sanction Quotation generator
-invoice.html            Tax Invoice generator + running ledger
-shared.js               Data fetch, formatting, PDF export helpers (both pages use this)
-shared.css               Diamond Noir theme, matches admin.html / credit.html
-sql/001_invoices_table.sql   Creates the `invoices` table + RLS policies
-supabase-config.js       ⚠️ NOT included — copy yours in, see below
-auth-guard.js             ⚠️ NOT included — copy yours in, see below
+index.html               Dashboard — links to every generator below, shows quick stats
+quotation.html            Sanction Quotation (processing-fee letter) generator
+invoice.html               Tax Invoice generator + running ledger
+sanction-letter.html        Formal Sanction Letter — applicant + collateral address, terms
+credit-report.html           Credit Appraisal Report PDF (from evaluation_reports, report_type='credit')
+legal-report.html             Legal Opinion Report PDF (report_type='legal')
+technical-report.html          Technical Valuation Report PDF (report_type='technical')
+shared.js                       Data fetch, formatting, PDF export helpers (every page uses this)
+shared.css                       Diamond Noir theme, matches admin.html / credit.html
+sql/001_invoices_table.sql        Creates the `invoices` table + RLS policies
+supabase-config.js                 ⚠️ NOT included — copy yours in, see below
+auth-guard.js                       ⚠️ NOT included — copy yours in, see below
 ```
+
+### Credit / Legal / Technical / Sanction Letter — how they pull data
+
+`sanction-letter.html` reuses the same `leads` + `sanctions` lookup as `quotation.html`
+(`SFM.fetchLeadBundle`), but renders the actual sanction letter — applicant address
+**and** collateral/property address (from `leads.property`), sanctioned terms, and
+standard disbursement conditions — instead of the processing-fee request.
+
+`credit-report.html`, `legal-report.html` and `technical-report.html` pull from
+`evaluation_reports` (`SFM.fetchEvaluationReport(leadId, reportType)`), which holds one
+row per Legal/Technical/Credit submission with all the officer's inputs in a `data`
+jsonb column. The field keys used by each page (`bankName`, `cibilScore`, `titleFlow`,
+`marketValue`, etc.) were confirmed live against the current schema — if the
+Legal/Technical/Credit forms in `SOLITAIRE-Legal-Technical-Credit` ever add or rename a
+field, the single place to update is the `SFM.fieldRows([...])` arrays inside each
+page's `build...ReportHTML()` function. Unfilled fields are skipped automatically
+rather than printing as blank rows.
 
 ## 1. Set up before first use
 
