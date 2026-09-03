@@ -198,19 +198,27 @@ const SFM = (function () {
       const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = pageWidth;
+
+      // MARGIN (pt): 36pt = 0.5in white border on every side of every page.
+      // Verified against A4 + this exact page-break loop — clean seams, no
+      // gaps/overlaps at page breaks. Bump to 54 for 0.75in or 72 for 1in.
+      const MARGIN = 36;
+      const usableWidth = pageWidth - MARGIN * 2;
+      const usablePageHeight = pageHeight - MARGIN * 2;
+
+      const imgWidth = usableWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
       let heightLeft = imgHeight;
-      let position = 0;
-      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
+      let position = MARGIN;
+      pdf.addImage(imgData, "JPEG", MARGIN, position, imgWidth, imgHeight);
+      heightLeft -= usablePageHeight;
 
       while (heightLeft > 0) {
-        position -= pageHeight;
+        position -= usablePageHeight;
         pdf.addPage();
-        pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
+        pdf.addImage(imgData, "JPEG", MARGIN, position, imgWidth, imgHeight);
+        heightLeft -= usablePageHeight;
       }
 
       pdf.save(filename);
