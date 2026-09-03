@@ -11,15 +11,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="shared.css" />
 
-<!-- Supabase client + this suite's shared auth (copy these two files in from
-     SOLITAIRE-Legal-Technical-Credit so the session/role check matches every
-     other page in the suite) -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-config.js"></script>
 <script src="auth-guard.js" data-page-role="admin"></script>
 
-<!-- PDF pipeline -->
-<!-- PDF libraries: load standalone globals used by shared.js -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="shared.js"></script>
@@ -53,24 +48,6 @@
 
     <div id="preview"></div>
 
-    <div id="quotationForm" style="display:none;">
-      <div class="field-grid" style="margin-top:16px;">
-        <div class="field">
-          <label for="discountInput">Discount (₹, optional)</label>
-          <input id="discountInput" type="number" step="0.01" min="0" value="0" />
-        </div>
-        <div class="field">
-          <label for="validityInput">Validity (Days)</label>
-          <input id="validityInput" type="number" step="1" min="1" value="15" />
-        </div>
-        <div class="field full">
-          <label for="dueDateInput">Payment Due By</label>
-          <input id="dueDateInput" type="date" />
-        </div>
-      </div>
-      <div class="preview-card" id="feePreview"></div>
-    </div>
-
     <button id="genBtn" class="btn btn-gold" style="margin-top:16px;" onclick="handleGenerateClick()" disabled>Generate Quotation PDF</button>
     <div id="status"></div>
   </div>
@@ -92,7 +69,7 @@
 
 <script>
 (function () {
-  let currentBundle = null; // { lead, sanction, leadId }
+  let currentBundle = null;
 
   function waitForAuth() {
     return new Promise(resolve => {
@@ -112,34 +89,6 @@
     }
     document.getElementById("appMain").style.display = "block";
     document.getElementById("lnInput").addEventListener("keydown", e => { if (e.key === "Enter") handleLookup(); });
-    document.getElementById("discountInput").addEventListener("input", updateFeePreview);
-    document.getElementById("validityInput").addEventListener("input", () => { setDefaultDueDate(); updateFeePreview(); });
-  }
-
-  function addDays(n) {
-    const d = new Date();
-    d.setDate(d.getDate() + n);
-    return d.toISOString().slice(0, 10);
-  }
-
-  function setDefaultDueDate() {
-    const days = Number(document.getElementById("validityInput").value) || 15;
-    document.getElementById("dueDateInput").value = addDays(days);
-  }
-
-  function grossFee() {
-    return (currentBundle && currentBundle.sanction && Number(currentBundle.sanction.processing_fee)) || 0;
-  }
-
-  function updateFeePreview() {
-    const fee = grossFee();
-    const discount = Number(document.getElementById("discountInput").value) || 0;
-    const net = Math.max(fee - discount, 0);
-    document.getElementById("feePreview").innerHTML = `
-      <div class="pk">Processing Fee</div><div class="pv">${SFM.formatINR(fee)}</div>
-      <div class="pk">Discount</div><div class="pv">${discount ? "− " + SFM.formatINR(discount) : "—"}</div>
-      <div class="pk">Net Payable</div><div class="pv" style="font-weight:700;color:var(--gold-bright);">${SFM.formatINR(net)}</div>
-    `;
   }
 
   window.handleLookup = async function handleLookup() {
@@ -152,7 +101,6 @@
     preview.innerHTML = "";
     genBtn.disabled = true;
     currentBundle = null;
-    document.getElementById("quotationForm").style.display = "none";
 
     if (!ln) { status.className = "error"; status.textContent = "Enter an LN number first."; return; }
 
@@ -171,11 +119,6 @@
         status.className = "ok";
         status.textContent = `${SFM.lnLabel(leadId)} loaded.`;
         genBtn.disabled = false;
-        document.getElementById("discountInput").value = 0;
-        document.getElementById("validityInput").value = 15;
-        setDefaultDueDate();
-        updateFeePreview();
-        document.getElementById("quotationForm").style.display = "block";
       }
 
       preview.innerHTML = `
@@ -197,13 +140,6 @@
     const b = lead.borrower || {};
     const sanctionAmount = (sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount);
     const lnNumber = SFM.lnLabel(leadId);
-
-    const grossFeeVal = Number(sanction.processing_fee) || 0;
-    const discount = Number(document.getElementById("discountInput").value) || 0;
-    const netFee = Math.max(grossFeeVal - discount, 0);
-    const validityDays = Number(document.getElementById("validityInput").value) || 15;
-    const dueDateVal = document.getElementById("dueDateInput").value;
-    const dueDateLabel = dueDateVal ? SFM.fmtDMY(dueDateVal) : "[DD/MM/YYYY]";
 
     return SFM.letterheadOpen("Ref. No.", `SFM/QT/${lnNumber}`) + `
       <div style="font-size:12px; line-height:1.5; margin-bottom:14px;">
@@ -233,10 +169,8 @@
         ${SFM.row("Sanctioned Loan Amount", `${SFM.formatINR(sanctionAmount)} (Rupees ${SFM.amountInWords(sanctionAmount)} Only)`)}
         ${SFM.row("Tenure", sanction.tenure_months ? sanction.tenure_months + " Months" : "[__] Months")}
         ${SFM.row("Rate of Interest", sanction.roi ? sanction.roi + "% p.a." : "[__]% p.a.")}
-        ${SFM.row("Processing Fee (Payable to Solitaire Finz Mart)", SFM.formatINR(grossFeeVal) + " + GST as applicable")}
-        ${discount ? SFM.row("Discount", "− " + SFM.formatINR(discount)) : ""}
-        ${discount ? SFM.row("Net Amount Payable", `<b>${SFM.formatINR(netFee)}</b> + GST as applicable`) : ""}
-        ${SFM.row("Payment Due By", dueDateLabel)}
+        ${SFM.row("Processing Fee (Payable to Solitaire Finz Mart)", SFM.formatINR(sanction.processing_fee) + " + GST as applicable")}
+        ${SFM.row("Payment Due By", "[DD/MM/YYYY]")}
         ${SFM.row("Mode of Payment", "[Bank Transfer / UPI / Cheque] – Details below")}
       </table>
 
@@ -264,7 +198,7 @@
         <li>The Client shall submit all requisite KYC, income, property, and other documents as required by the Bank/NBFC in a timely manner to avoid delays in processing.</li>
         <li>Solitaire Finz Mart acts purely as a facilitator/DSA between the Client and the Bank/NBFC and shall not be held liable for any delay, rejection, or change in terms made by the lending institution.</li>
         <li>Any statutory taxes (including GST) applicable on the processing fee shall be charged additionally as per prevailing rates.</li>
-        <li>This quotation is valid for a period of ${validityDays} days from the date of issue, post which the terms are subject to revalidation.</li>
+        <li>This quotation is valid for a period of [__] days from the date of issue, post which the terms are subject to revalidation.</li>
         <li>Any dispute arising out of this quotation shall be subject to the jurisdiction of courts at Thane, Maharashtra.</li>
         <li>This quotation is confidential and intended solely for the named Applicant/Client.</li>
       </ul>
