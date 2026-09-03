@@ -1,19 +1,5 @@
-/* ============================================================================
-   SOLITAIRE — Shared helpers for Quotation & Invoice generators
-   Depends on supabase-config.js + auth-guard.js already being loaded
-   (same files used by admin.html / credit.html / legal.html / technical.html
-   in the SOLITAIRE-Legal-Technical-Credit repo). This file assumes
-   window.SolitaireDB.sb is the authenticated Supabase client.
-   ========================================================================== */
-
 const SFM = (function () {
 
-  /* ---------------------------------------------------------------------
-     LN NUMBER PARSING
-     LN numbers are NOT a stored column — admin.html builds them on the fly
-     as "LN-" + leads.id (see renderCaseTable in admin.html). So "LN-104",
-     "ln104", "104" all resolve to leads.id = 104.
-     --------------------------------------------------------------------- */
   function parseLeadId(input) {
     const clean = String(input || "").trim();
     if (!clean) return null;
@@ -26,9 +12,6 @@ const SFM = (function () {
     return "LN-" + id;
   }
 
-  /* ---------------------------------------------------------------------
-     DATA FETCH — pulls the lead + its latest sanction record.
-     --------------------------------------------------------------------- */
   async function fetchLeadBundle(leadIdOrLN) {
     const sb = window.SolitaireDB && window.SolitaireDB.sb;
     if (!sb) throw new Error("Not connected — supabase-config.js / auth-guard.js not loaded.");
@@ -58,9 +41,6 @@ const SFM = (function () {
     return { lead, sanction, leadId };
   }
 
-  /* ---------------------------------------------------------------------
-     FORMAT HELPERS
-     --------------------------------------------------------------------- */
   function esc(s) {
     return (s == null ? "" : s + "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   }
@@ -112,23 +92,6 @@ const SFM = (function () {
     return parts.join(" - ") || "[Client Address]";
   }
 
-  /* ---------------------------------------------------------------------
-     PDF EXPORT — shared branded-letterhead → PDF pipeline. Uses standalone
-     html2canvas + jsPDF globals loaded by quotation.html/invoice.html.
-
-     MOBILE FIX (Sep 2026): the offscreen render container previously used
-     `position: fixed`. html2canvas clones the DOM into a hidden iframe and
-     re-renders it there — but `position: fixed` elements inside that clone
-     stay pinned to the iframe's *visible* viewport height, not the full
-     `windowHeight` we pass in. On desktop the initial viewport is tall
-     enough that this mostly went unnoticed; on mobile (short initial
-     viewport) everything below roughly one screen's worth of content was
-     silently clipped, producing a PDF that cuts off partway down the page.
-     Switching the CAPTURED container to `position: absolute` avoids this,
-     since absolute elements lay out against full document height instead
-     of viewport height. Only the cosmetic overlay stays `fixed` — it is
-     never part of the captured element, so it doesn't affect the render.
-     --------------------------------------------------------------------- */
   async function exportHTMLToPDF(html, filename) {
     if (typeof window.html2canvas !== "function") {
       throw new Error("html2canvas failed to load. Please refresh the page and try again.");
@@ -137,19 +100,14 @@ const SFM = (function () {
       throw new Error("jsPDF failed to load. Please refresh the page and try again.");
     }
 
-    // Cosmetic full-screen cover so the user doesn't see the render happen.
-    // This can stay `fixed` — it is not the element passed to html2canvas.
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
     overlay.style.zIndex = "99998";
     overlay.style.background = "#ffffff";
 
-    // IMPORTANT: `position: absolute`, not `fixed`. See comment above the
-    // function — `fixed` gets clipped to the initial mobile viewport height
-    // inside html2canvas's cloned iframe, cutting the PDF off partway down.
     const container = document.createElement("div");
-    container.style.position = "absolute";
+    container.style.position = "fixed";
     container.style.top = "0";
     container.style.left = "0";
     container.style.zIndex = "99999";
@@ -166,24 +124,14 @@ const SFM = (function () {
       }
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-      // Re-read scrollWidth/scrollHeight AFTER the container is in the DOM
-      // and fonts are loaded, so these reflect true final layout size —
-      // critical on mobile where font metrics can shift wrap points.
-      const fullWidth = container.scrollWidth;
-      const fullHeight = container.scrollHeight;
-
       const canvas = await window.html2canvas(container, {
         scale: 2,
         useCORS: true,
         backgroundColor: "#ffffff",
         scrollX: 0,
         scrollY: 0,
-        x: 0,
-        y: 0,
-        width: fullWidth,
-        height: fullHeight,
-        windowWidth: fullWidth,
-        windowHeight: fullHeight,
+        windowWidth: container.scrollWidth,
+        windowHeight: container.scrollHeight,
       });
 
       if (!canvas || !canvas.width || !canvas.height) {
@@ -198,27 +146,19 @@ const SFM = (function () {
       const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
       const pageWidth = pdf.internal.pageSize.getWidth();
       const pageHeight = pdf.internal.pageSize.getHeight();
-
-      // MARGIN (pt): 36pt = 0.5in white border on every side of every page.
-      // Verified against A4 + this exact page-break loop — clean seams, no
-      // gaps/overlaps at page breaks. Bump to 54 for 0.75in or 72 for 1in.
-      const MARGIN = 36;
-      const usableWidth = pageWidth - MARGIN * 2;
-      const usablePageHeight = pageHeight - MARGIN * 2;
-
-      const imgWidth = usableWidth;
+      const imgWidth = pageWidth;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
       let heightLeft = imgHeight;
-      let position = MARGIN;
-      pdf.addImage(imgData, "JPEG", MARGIN, position, imgWidth, imgHeight);
-      heightLeft -= usablePageHeight;
+      let position = 0;
+      pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
 
       while (heightLeft > 0) {
-        position -= usablePageHeight;
+        position -= pageHeight;
         pdf.addPage();
-        pdf.addImage(imgData, "JPEG", MARGIN, position, imgWidth, imgHeight);
-        heightLeft -= usablePageHeight;
+        pdf.addImage(imgData, "JPEG", 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
       }
 
       pdf.save(filename);
@@ -228,9 +168,6 @@ const SFM = (function () {
     }
   }
 
-  /* ---------------------------------------------------------------------
-     BRANDED LETTERHEAD (shared header/footer used by both documents)
-     --------------------------------------------------------------------- */
   function letterheadOpen(refLabel, refValue) {
     return `
     <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 30px 36px; max-width: 780px; background:#fff;">
