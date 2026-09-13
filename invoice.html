@@ -408,10 +408,39 @@
 
       btn.textContent = "Generating PDF…";
       const doc = buildInvoiceDoc(currentBundle, invoiceNo, totals, meta, []);
-      await SFM.exportHTMLToPDFPaged(doc, `Invoice_${invoiceNo.replace(/\//g, "-")}.pdf`);
+      const pdfFilename = `Invoice_${invoiceNo.replace(/\//g, "-")}.pdf`;
+      const pdfOut = await SFM.exportHTMLToPDFPaged(doc, pdfFilename);
 
       status.className = "ok";
       status.textContent = `${invoiceNo} saved and PDF generated. Record payments for it below.`;
+
+      // Addon: also deliver a branded summary + download link to the client
+      // on WhatsApp/email (whichever contact is on file) — does not block
+      // or change the save/PDF flow above if it fails.
+      try {
+        const sendResult = await SFM.sendDocumentToClient({
+          leadId,
+          docType: "invoice",
+          docLabel: "Tax Invoice",
+          refNo: invoiceNo,
+          pdfBase64: pdfOut.base64,
+          filename: pdfFilename,
+          clientName: b.name,
+          recipientEmail: b.email || null,
+          recipientPhone: b.mobile || null,
+          summary: [
+            { label: "Loan", value: `${lead.loan_type || "Loan"} (${SFM.lnLabel(leadId)})` },
+            { label: "Total Payable", value: SFM.formatINR(totals.total) },
+            { label: "Balance Due", value: SFM.formatINR(totals.total) },
+            ...(meta.dueDate ? [{ label: "Payment Due Date", value: SFM.fmtDMY(meta.dueDate) }] : []),
+          ],
+        });
+        const note = SFM.describeSendResults(sendResult);
+        if (note) status.textContent += " " + note;
+      } catch (sendErr) {
+        console.error("send-document (invoice) failed", sendErr);
+      }
+
       await loadLedger();
       if (inserted && inserted.id) await openPaymentPanel(inserted.id);
     } catch (err) {
