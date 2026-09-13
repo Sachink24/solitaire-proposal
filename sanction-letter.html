@@ -245,8 +245,37 @@
     btn.disabled = true; btn.textContent = "Generating…";
     try {
       const doc = buildSanctionLetterDoc(currentBundle);
-      await SFM.exportHTMLToPDFPaged(doc, `Sanction_Letter_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
+      const pdfFilename = `Sanction_Letter_${SFM.lnLabel(currentBundle.leadId)}.pdf`;
+      const pdfOut = await SFM.exportHTMLToPDFPaged(doc, pdfFilename);
       status.className = "ok"; status.textContent = "Sanction Letter PDF generated successfully.";
+
+      try {
+        const { lead, sanction, leadId } = currentBundle;
+        const b = lead.borrower || {};
+        const sanctionAmount = sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount;
+
+        const sendResult = await SFM.sendDocumentToClient({
+          leadId,
+          docType: "sanction_letter",
+          docLabel: "Sanction Letter",
+          refNo: sanction.sanction_reference_no || `SFM/SL/${SFM.lnLabel(leadId)}`,
+          pdfBase64: pdfOut.base64,
+          filename: pdfFilename,
+          clientName: b.name,
+          recipientEmail: b.email || null,
+          recipientPhone: b.mobile || null,
+          summary: [
+            { label: "Loan", value: `${lead.loan_type || "Loan"} — ${SFM.formatINR(sanctionAmount)}` },
+            { label: "Bank / NBFC", value: sanction.banker || lead.institution_name || "—" },
+            ...(sanction.tenure_months ? [{ label: "Tenure", value: sanction.tenure_months + " Months" }] : []),
+            ...(sanction.roi ? [{ label: "Rate of Interest", value: sanction.roi + "% p.a." }] : []),
+          ],
+        });
+        const note = SFM.describeSendResults(sendResult);
+        if (note) status.textContent += " " + note;
+      } catch (sendErr) {
+        console.error("send-document (sanction letter) failed", sendErr);
+      }
     } catch (err) {
       console.error(err);
       status.className = "error"; status.textContent = "Error: " + err.message;
