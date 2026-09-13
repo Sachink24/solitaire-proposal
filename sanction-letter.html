@@ -137,7 +137,7 @@
     }
   };
 
-  function buildSanctionLetterHTML({ lead, sanction, leadId }) {
+  function buildSanctionLetterDoc({ lead, sanction, leadId }) {
     const b = lead.borrower || {};
     const sanctionAmount = sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount;
     const lnNumber = SFM.lnLabel(leadId);
@@ -145,7 +145,8 @@
     const collateralAddress = SFM.collateralAddress(lead);
     const coApplicants = Array.isArray(lead.co_applicants) ? lead.co_applicants : [];
 
-    return SFM.letterheadOpen("Sanction Ref. No.", sanction.sanction_reference_no || `SFM/SL/${lnNumber}`) + `
+    const body = `
+      <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 8px 36px 4px; box-sizing:border-box;">
       <div style="font-size:12px; line-height:1.5; margin-bottom:14px;">
         <b>To,</b><br/>
         ${SFM.esc(b.name || "[Applicant Name]")}${coApplicants.length ? " &amp; " + SFM.esc(coApplicants.map(c => c.name).filter(Boolean).join(", ")) : ""}<br/>
@@ -225,7 +226,13 @@
       <div style="font-size:12px; margin-bottom:8px;">Signature: ____________________________</div>
       <div style="font-size:12px; margin-bottom:8px;">Name: ____________________________</div>
       <div style="font-size:12px;">Date: ____________________________</div>
-      ` + SFM.letterheadClose();
+      </div>`;
+
+    return {
+      header: SFM.letterheadHeader("Sanction Ref. No.", sanction.sanction_reference_no || `SFM/SL/${lnNumber}`, SFM.todayDMY()),
+      body,
+      footer: SFM.letterheadFooter(),
+    };
   }
 
   window.handleGenerateClick = async function handleGenerateClick() {
@@ -237,8 +244,8 @@
     }
     btn.disabled = true; btn.textContent = "Generating…";
     try {
-      const html = buildSanctionLetterHTML(currentBundle);
-      await SFM.exportHTMLToPDF(html, `Sanction_Letter_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
+      const doc = buildSanctionLetterDoc(currentBundle);
+      await SFM.exportHTMLToPDFPaged(doc, `Sanction_Letter_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
       status.className = "ok"; status.textContent = "Sanction Letter PDF generated successfully.";
     } catch (err) {
       console.error(err);
