@@ -197,7 +197,7 @@
     }
   };
 
-  function buildQuotationHTML({ lead, sanction, leadId }) {
+  function buildQuotationDoc({ lead, sanction, leadId }) {
     const b = lead.borrower || {};
     const sanctionAmount = (sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount);
     const lnNumber = SFM.lnLabel(leadId);
@@ -209,7 +209,8 @@
     const dueDateVal = document.getElementById("dueDateInput").value;
     const dueDateLabel = dueDateVal ? SFM.fmtDMY(dueDateVal) : "[DD/MM/YYYY]";
 
-    return SFM.letterheadOpen("Ref. No.", `SFM/QT/${lnNumber}`) + `
+    const body = `
+      <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 8px 36px 4px; box-sizing:border-box;">
       <div style="font-size:12px; line-height:1.5; margin-bottom:14px;">
         <b>To,</b><br/>
         ${SFM.esc(b.name || "[Applicant Name]")}<br/>
@@ -290,7 +291,13 @@
       <div style="font-size:12px; margin-bottom:8px;">Signature: ____________________________</div>
       <div style="font-size:12px; margin-bottom:8px;">Name: ____________________________</div>
       <div style="font-size:12px;">Date: ____________________________</div>
-      ` + SFM.letterheadClose();
+      </div>`;
+
+    return {
+      header: SFM.letterheadHeader("Ref. No.", `SFM/QT/${lnNumber}`, SFM.todayDMY()),
+      body,
+      footer: SFM.letterheadFooter(),
+    };
   }
 
   window.handleGenerateClick = async function handleGenerateClick() {
@@ -302,8 +309,8 @@
     }
     btn.disabled = true; btn.textContent = "Generating…";
     try {
-      const html = buildQuotationHTML(currentBundle);
-      await SFM.exportHTMLToPDF(html, `Quotation_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
+      const doc = buildQuotationDoc(currentBundle);
+      await SFM.exportHTMLToPDFPaged(doc, `Quotation_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
       status.className = "ok"; status.textContent = "Quotation PDF generated successfully.";
     } catch (err) {
       console.error(err);
