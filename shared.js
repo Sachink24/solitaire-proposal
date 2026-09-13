@@ -480,10 +480,36 @@ const SFM = (function () {
       }
 
       pdf.save(filename);
+      // Return the bytes too (base64) so callers can optionally also send
+      // this exact PDF to the client — existing callers that don't use the
+      // return value are unaffected.
+      return { base64: pdf.output("datauristring").split(",")[1], filename };
     } finally {
       document.body.removeChild(stage);
       document.body.removeChild(overlay);
     }
+  }
+
+  /* ---------------------------------------------------------------------
+     SEND TO CLIENT — uploads the just-generated PDF to private storage and
+     asks the send-document Edge Function to deliver a branded deal-summary
+     card (with a download button/link for that PDF) to the client's
+     WhatsApp and/or email, whichever is on file. Any channel without
+     WHATSAPP_ACCESS_TOKEN/WHATSAPP_PHONE_NUMBER_ID or RESEND_API_KEY
+     configured in the project's Edge Function secrets comes back as
+     status "skipped" / reason "not_configured" rather than throwing.
+     --------------------------------------------------------------------- */
+  async function sendDocumentToClient({ leadId, docType, docLabel, refNo, pdfBase64, filename, summary, clientName, recipientEmail, recipientPhone }) {
+    const sb = window.SolitaireDB && window.SolitaireDB.sb;
+    if (!sb) throw new Error("Not connected — supabase-config.js / auth-guard.js not loaded.");
+    if (!recipientEmail && !recipientPhone) {
+      return { ok: true, skipped: true, reason: "no_contact_on_file" };
+    }
+    const { data, error } = await sb.functions.invoke("send-document", {
+      body: { leadId, docType, docLabel, refNo, pdfBase64, filename, summary, clientName, recipientEmail, recipientPhone },
+    });
+    if (error) throw error;
+    return data;
   }
 
   /* Repeating header used by exportHTMLToPDFPaged — brand block + a
@@ -565,9 +591,25 @@ const SFM = (function () {
     </tr>`;
   }
 
+  function describeSendResults(sendResult) {
+    if (!sendResult) return "";
+    if (sendResult.skipped) return "Client has no email or phone on file — nothing sent.";
+    const parts = [];
+    const label = { whatsapp: "WhatsApp", email: "Email" };
+    for (const ch of ["whatsapp", "email"]) {
+      const r = sendResult.results && sendResult.results[ch];
+      if (!r) continue;
+      if (r.status === "sent") parts.push(`sent to client on ${label[ch]}`);
+      else if (r.status === "failed") parts.push(`${label[ch]} send failed (${r.reason || "error"})`);
+      // "skipped" with reason "not_configured" or "no_contact_on_file" — stay quiet, nothing actionable for the associate.
+    }
+    return parts.length ? "Also " + parts.join(" and ") + "." : "";
+  }
+
   return {
     parseLeadId, lnLabel, fetchLeadBundle, fetchEvaluationReport, esc, formatINR, amountInWords,
     todayDMY, fmtDMY, borrowerAddress, collateralAddress, pick, dv, fieldRows, verifyChecklistRows,
     exportHTMLToPDF, exportHTMLToPDFPaged, letterheadOpen, letterheadClose, letterheadHeader, letterheadFooter, row,
+    sendDocumentToClient, describeSendResults,
   };
 })();
