@@ -310,8 +310,41 @@
     btn.disabled = true; btn.textContent = "Generating…";
     try {
       const doc = buildQuotationDoc(currentBundle);
-      await SFM.exportHTMLToPDFPaged(doc, `Quotation_${SFM.lnLabel(currentBundle.leadId)}.pdf`);
+      const pdfFilename = `Quotation_${SFM.lnLabel(currentBundle.leadId)}.pdf`;
+      const pdfOut = await SFM.exportHTMLToPDFPaged(doc, pdfFilename);
       status.className = "ok"; status.textContent = "Quotation PDF generated successfully.";
+
+      try {
+        const { lead, sanction, leadId } = currentBundle;
+        const b = lead.borrower || {};
+        const sanctionAmount = sanction.sanction_amount ?? lead.credit_loan_amount ?? lead.loan_amount;
+        const grossFeeVal = Number(sanction.processing_fee) || 0;
+        const discount = Number(document.getElementById("discountInput").value) || 0;
+        const netFee = Math.max(grossFeeVal - discount, 0);
+        const dueDateVal = document.getElementById("dueDateInput").value;
+
+        const sendResult = await SFM.sendDocumentToClient({
+          leadId,
+          docType: "quotation",
+          docLabel: "Sanction Quotation",
+          refNo: `SFM/QT/${SFM.lnLabel(leadId)}`,
+          pdfBase64: pdfOut.base64,
+          filename: pdfFilename,
+          clientName: b.name,
+          recipientEmail: b.email || null,
+          recipientPhone: b.mobile || null,
+          summary: [
+            { label: "Loan", value: `${lead.loan_type || "Loan"} — ${SFM.formatINR(sanctionAmount)}` },
+            { label: "Bank / NBFC", value: sanction.banker || lead.institution_name || "—" },
+            { label: "Processing Fee Payable", value: SFM.formatINR(netFee) + " + GST" },
+            ...(dueDateVal ? [{ label: "Payment Due By", value: SFM.fmtDMY(dueDateVal) }] : []),
+          ],
+        });
+        const note = SFM.describeSendResults(sendResult);
+        if (note) status.textContent += " " + note;
+      } catch (sendErr) {
+        console.error("send-document (quotation) failed", sendErr);
+      }
     } catch (err) {
       console.error(err);
       status.className = "error"; status.textContent = "Error: " + err.message;
