@@ -143,11 +143,12 @@
     }
   };
 
-  function buildTechnicalReportHTML(lead, report, leadId) {
+  function buildTechnicalReportDoc(lead, report, leadId) {
     const d = report.data || {};
     const lnNumber = SFM.lnLabel(leadId);
 
-    return SFM.letterheadOpen("Ref. No.", `SFM/TR/${lnNumber}`) + `
+    const body = `
+      <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 8px 36px 4px; box-sizing:border-box;">
       <div style="text-align:center; font-family:Cambria, Georgia, serif; font-weight:bold; font-size:17px; letter-spacing:1px; margin-bottom:14px; text-transform:uppercase;">
         Technical Valuation Report
       </div>
@@ -258,7 +259,13 @@
       <div style="font-size:13px; font-weight:bold;">${SFM.dv(d, "valuerName")}</div>
       <div style="font-size:12px; font-style:italic; color:#555;">Technical Valuer${d.valuerId ? " · " + SFM.esc(d.valuerId) : ""}</div>
       <div style="font-size:11px; color:#777; margin-top:4px;">Submitted by ${SFM.esc(report.submitted_by || "—")}${report.approved_at ? `, approved by ${SFM.esc(report.approved_by || "—")} on ${SFM.fmtDMY(report.approved_at)}` : ""}</div>
-      ` + SFM.letterheadClose("Solitaire Finz Mart | Internal Technical Valuation Report — Confidential");
+      </div>`;
+
+    return {
+      header: SFM.letterheadHeader("Ref. No.", `SFM/TR/${lnNumber}`, SFM.todayDMY()),
+      body,
+      footer: SFM.letterheadFooter("Solitaire Finz Mart | Internal Technical Valuation Report — Confidential"),
+    };
   }
 
   window.handleGenerateClick = async function handleGenerateClick() {
@@ -270,8 +277,8 @@
     }
     btn.disabled = true; btn.textContent = "Generating…";
     try {
-      const html = buildTechnicalReportHTML(currentLead, currentReport, currentLeadId);
-      await SFM.exportHTMLToPDF(html, `Technical_Report_${SFM.lnLabel(currentLeadId)}.pdf`);
+      const doc = buildTechnicalReportDoc(currentLead, currentReport, currentLeadId);
+      await SFM.exportHTMLToPDFPaged(doc, `Technical_Report_${SFM.lnLabel(currentLeadId)}.pdf`);
       status.className = "ok"; status.textContent = "Technical Report PDF generated successfully.";
     } catch (err) {
       console.error(err);
