@@ -294,6 +294,168 @@ const SFM = (function () {
   }
 
   /* ---------------------------------------------------------------------
+     PAGED PDF EXPORT — renders a repeating letterhead header + products
+     footer on EVERY page, with the document body sliced to fit between
+     them. Unlike exportHTMLToPDF (single continuous screenshot sliced
+     across pages, header/footer only appear once), this renders the
+     header and footer as their own canvases and re-stamps them on every
+     page, plus a running "Page X of Y" marker.
+     --------------------------------------------------------------------- */
+  async function exportHTMLToPDFPaged({ header, body, footer }, filename) {
+    if (typeof window.html2canvas !== "function") {
+      throw new Error("html2canvas failed to load. Please refresh the page and try again.");
+    }
+    if (!window.jspdf || typeof window.jspdf.jsPDF !== "function") {
+      throw new Error("jsPDF failed to load. Please refresh the page and try again.");
+    }
+
+    const RENDER_WIDTH = 780; // px — same convention used across all SOLITAIRE PDFs
+
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.inset = "0";
+    overlay.style.zIndex = "99998";
+    overlay.style.background = "#ffffff";
+
+    const stage = document.createElement("div");
+    stage.style.position = "fixed";
+    stage.style.top = "0";
+    stage.style.left = "0";
+    stage.style.zIndex = "99999";
+    stage.style.background = "#ffffff";
+    stage.style.width = RENDER_WIDTH + "px";
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(stage);
+
+    async function renderToCanvas(html) {
+      const div = document.createElement("div");
+      div.style.width = RENDER_WIDTH + "px";
+      div.style.background = "#ffffff";
+      div.innerHTML = html;
+      stage.appendChild(div);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const canvas = await window.html2canvas(div, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: div.scrollWidth,
+        windowHeight: div.scrollHeight,
+      });
+      stage.removeChild(div);
+      if (!canvas || !canvas.width || !canvas.height) {
+        throw new Error("Render came back empty — nothing to put in the PDF. Try again after a full page refresh.");
+      }
+      return canvas;
+    }
+
+    try {
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
+
+      const [headerCanvas, footerCanvas, bodyCanvas] = [
+        await renderToCanvas(header),
+        await renderToCanvas(footer),
+        await renderToCanvas(body),
+      ];
+
+      const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
+      const pageWidthPt = pdf.internal.pageSize.getWidth();
+      const pageHeightPt = pdf.internal.pageSize.getHeight();
+      const scale = pageWidthPt / bodyCanvas.width; // pt per source px (same width for header/footer/body)
+
+      const headerHeightPt = headerCanvas.height * scale;
+      const footerHeightPt = footerCanvas.height * scale;
+      const contentHeightPt = pageHeightPt - headerHeightPt - footerHeightPt;
+      const contentHeightPx = Math.floor(contentHeightPt / scale);
+
+      if (contentHeightPx <= 20) {
+        throw new Error("Header/footer leave no room for content — check letterhead sizing.");
+      }
+
+      const headerImg = headerCanvas.toDataURL("image/jpeg", 0.98);
+      const footerImg = footerCanvas.toDataURL("image/jpeg", 0.98);
+
+      const totalPages = Math.max(1, Math.ceil(bodyCanvas.height / contentHeightPx));
+
+      for (let page = 0; page < totalPages; page++) {
+        if (page > 0) pdf.addPage();
+
+        const sliceY = page * contentHeightPx;
+        const sliceHeightPx = Math.min(contentHeightPx, bodyCanvas.height - sliceY);
+
+        const sliceCanvas = document.createElement("canvas");
+        sliceCanvas.width = bodyCanvas.width;
+        sliceCanvas.height = sliceHeightPx;
+        const ctx = sliceCanvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
+        ctx.drawImage(bodyCanvas, 0, sliceY, bodyCanvas.width, sliceHeightPx, 0, 0, bodyCanvas.width, sliceHeightPx);
+        const sliceImg = sliceCanvas.toDataURL("image/jpeg", 0.98);
+
+        pdf.addImage(headerImg, "JPEG", 0, 0, pageWidthPt, headerHeightPt);
+        pdf.addImage(sliceImg, "JPEG", 0, headerHeightPt, pageWidthPt, sliceHeightPx * scale);
+        pdf.addImage(footerImg, "JPEG", 0, pageHeightPt - footerHeightPt, pageWidthPt, footerHeightPt);
+
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(7.5);
+        pdf.setTextColor(120, 120, 120);
+        pdf.text(`Page ${page + 1} of ${totalPages}`, pageWidthPt - 14, pageHeightPt - 5, { align: "right" });
+      }
+
+      pdf.save(filename);
+    } finally {
+      document.body.removeChild(stage);
+      document.body.removeChild(overlay);
+    }
+  }
+
+  /* Repeating header used by exportHTMLToPDFPaged — brand block + a
+     constant reference line (invoice/ref no. + date), shown on every page. */
+  function letterheadHeader(refLabel, refValue, dateStr) {
+    return `
+    <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 22px 36px 8px; background:#fff; box-sizing:border-box;">
+      <div style="text-align:center; margin-bottom:6px;">
+        <div style="font-family: Cambria, Georgia, serif; font-size:24px; font-weight:bold; letter-spacing:2px; color:#C9A227;">
+          SOLITAIRE FINZ MART
+        </div>
+        <div style="font-size:10.5px; color:#555; font-style:italic; margin-top:2px;">
+          LOAN DSA &nbsp;•&nbsp; FINANCIAL ADVISORY &nbsp;•&nbsp; ESTABLISHED SINCE 15+ YEARS
+        </div>
+        <div style="font-size:10.5px; color:#555; margin-top:2px;">
+          Shop No. 8, Janaram Niwas, Thane–Bhiwandi Road, Bhiwandi, Thane, Maharashtra 421302 &nbsp;|&nbsp; sachinkale241981@gmail.com
+        </div>
+      </div>
+      <div style="border-bottom:2px solid #C9A227; margin: 8px 0 8px;"></div>
+      <div style="display:flex; justify-content:space-between; font-size:11.5px;">
+        <div><b>${esc(refLabel)}:</b> ${esc(refValue)}</div>
+        <div><b>Date:</b> ${esc(dateStr || todayDMY())}</div>
+      </div>
+    </div>`;
+  }
+
+  /* Repeating footer used by exportHTMLToPDFPaged — lists every product/
+     service line so it's visible at the bottom of EVERY page, plus a
+     closing note. Page number is stamped separately by the export fn. */
+  function letterheadFooter(note) {
+    return `
+    <div style="font-family: Georgia, 'Times New Roman', serif; background:#fff; box-sizing:border-box; padding: 4px 36px 12px;">
+      <div style="border-top:1px solid #C9A227; padding-top:6px; text-align:center;">
+        <div style="font-size:9px; font-weight:bold; letter-spacing:.02em; color:#8A6D1F; line-height:1.5;">
+          HOME LOANS &nbsp;·&nbsp; BUSINESS LOANS &nbsp;·&nbsp; LOAN AGAINST PROPERTY (LAP) &nbsp;·&nbsp; BALANCE TRANSFER<br/>
+          CONSTRUCTION &amp; PROJECT FINANCE &nbsp;·&nbsp; OD / CC &nbsp;·&nbsp; COMMERCIAL PROPERTY LOANS
+        </div>
+        <div style="font-size:8.5px; font-style:italic; color:#777; margin-top:3px;">
+          ${esc(note || "Solitaire Finz Mart, Bhiwandi, Thane, Maharashtra — this is a computer-generated document.")}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  /* ---------------------------------------------------------------------
      BRANDED LETTERHEAD (shared header/footer used by both documents)
      --------------------------------------------------------------------- */
   function letterheadOpen(refLabel, refValue) {
@@ -333,6 +495,6 @@ const SFM = (function () {
   return {
     parseLeadId, lnLabel, fetchLeadBundle, fetchEvaluationReport, esc, formatINR, amountInWords,
     todayDMY, fmtDMY, borrowerAddress, collateralAddress, pick, dv, fieldRows, verifyChecklistRows,
-    exportHTMLToPDF, letterheadOpen, letterheadClose, row,
+    exportHTMLToPDF, exportHTMLToPDFPaged, letterheadOpen, letterheadClose, letterheadHeader, letterheadFooter, row,
   };
 })();
