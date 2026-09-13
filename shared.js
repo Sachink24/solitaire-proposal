@@ -296,10 +296,11 @@ const SFM = (function () {
   /* ---------------------------------------------------------------------
      PAGED PDF EXPORT — renders a repeating letterhead header + products
      footer on EVERY page, with the document body sliced to fit between
-     them. Unlike exportHTMLToPDF (single continuous screenshot sliced
-     across pages, header/footer only appear once), this renders the
-     header and footer as their own canvases and re-stamps them on every
-     page, plus a running "Page X of Y" marker.
+     them. The body is paginated at element boundaries (never mid-line or
+     mid-table-row): each direct child block of the body is measured, and
+     if a block would cross the bottom margin it is pushed whole to the
+     next page. Blocks taller than a full page (rare — e.g. a very long
+     table) are recursively split at their own children's boundaries.
      --------------------------------------------------------------------- */
   async function exportHTMLToPDFPaged({ header, body, footer }, filename) {
     if (typeof window.html2canvas !== "function") {
@@ -309,7 +310,8 @@ const SFM = (function () {
       throw new Error("jsPDF failed to load. Please refresh the page and try again.");
     }
 
-    const RENDER_WIDTH = 780; // px — same convention used across all SOLITAIRE PDFs
+    const RENDER_WIDTH = 780; // css px — same convention used across all SOLITAIRE PDFs
+    const RENDER_SCALE = 2;
 
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
@@ -328,27 +330,81 @@ const SFM = (function () {
     document.body.appendChild(overlay);
     document.body.appendChild(stage);
 
-    async function renderToCanvas(html) {
+    async function renderToCanvas(el) {
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const canvas = await window.html2canvas(el, {
+        scale: RENDER_SCALE,
+        useCORS: true,
+        backgroundColor: "#ffffff",
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: el.scrollWidth,
+        windowHeight: el.scrollHeight,
+      });
+      if (!canvas || !canvas.width || !canvas.height) {
+        throw new Error("Render came back empty — nothing to put in the PDF. Try again after a full page refresh.");
+      }
+      return canvas;
+    }
+
+    async function renderHTMLToCanvas(html) {
       const div = document.createElement("div");
       div.style.width = RENDER_WIDTH + "px";
       div.style.background = "#ffffff";
       div.innerHTML = html;
       stage.appendChild(div);
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const canvas = await window.html2canvas(div, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff",
-        scrollX: 0,
-        scrollY: 0,
-        windowWidth: div.scrollWidth,
-        windowHeight: div.scrollHeight,
-      });
+      const canvas = await renderToCanvas(div);
       stage.removeChild(div);
-      if (!canvas || !canvas.width || !canvas.height) {
-        throw new Error("Render came back empty — nothing to put in the PDF. Try again after a full page refresh.");
-      }
       return canvas;
+    }
+
+    // Walks the box tree collecting break points (css-px offsets, relative
+    // to `root`, where it is safe to start a new page) — i.e. the top edge
+    // of every block that either fits standalone or has been split into
+    // sub-blocks that do. Never returns an offset that falls inside text.
+    function collectBreakOffsets(root, maxHeightCss) {
+      const rootTop = root.getBoundingClientRect().top;
+      const offsets = [0];
+
+      function walk(el) {
+        const kids = Array.from(el.children || []);
+        if (!kids.length) return; // leaf — nothing finer to split on
+        for (const kid of kids) {
+          const r = kid.getBoundingClientRect();
+          if (r.height > maxHeightCss) {
+            walk(kid); // too tall on its own — descend for finer break points
+          } else {
+            offsets.push(r.top - rootTop);
+          }
+        }
+      }
+      walk(root);
+      offsets.push(root.getBoundingClientRect().height);
+      return Array.from(new Set(offsets.map(n => Math.round(n)))).sort((a, b) => a - b);
+    }
+
+    // Greedily packs the available break offsets into pages no taller than
+    // maxHeightCss, always cutting exactly on a break offset.
+    function paginate(breakOffsets, totalHeightCss, maxHeightCss) {
+      const pages = [];
+      let pageStart = 0;
+      for (let i = 1; i < breakOffsets.length; i++) {
+        const candidateEnd = breakOffsets[i];
+        if (candidateEnd - pageStart > maxHeightCss) {
+          const prevOffset = breakOffsets[i - 1];
+          if (prevOffset === pageStart) {
+            // Single block taller than a page and unsplittable — take it
+            // alone rather than produce a zero-height page.
+            pages.push([pageStart, candidateEnd]);
+            pageStart = candidateEnd;
+          } else {
+            pages.push([pageStart, prevOffset]);
+            pageStart = prevOffset;
+          }
+        }
+      }
+      if (pageStart < totalHeightCss) pages.push([pageStart, totalHeightCss]);
+      return pages;
     }
 
     try {
@@ -356,36 +412,52 @@ const SFM = (function () {
         await document.fonts.ready;
       }
 
-      const [headerCanvas, footerCanvas, bodyCanvas] = [
-        await renderToCanvas(header),
-        await renderToCanvas(footer),
-        await renderToCanvas(body),
+      const [headerCanvas, footerCanvas] = [
+        await renderHTMLToCanvas(header),
+        await renderHTMLToCanvas(footer),
       ];
 
       const pdf = new window.jspdf.jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
       const pageWidthPt = pdf.internal.pageSize.getWidth();
       const pageHeightPt = pdf.internal.pageSize.getHeight();
-      const scale = pageWidthPt / bodyCanvas.width; // pt per source px (same width for header/footer/body)
+      const ptPerCssPx = pageWidthPt / RENDER_WIDTH;
 
-      const headerHeightPt = headerCanvas.height * scale;
-      const footerHeightPt = footerCanvas.height * scale;
+      const headerHeightPt = (headerCanvas.height / RENDER_SCALE) * ptPerCssPx;
+      const footerHeightPt = (footerCanvas.height / RENDER_SCALE) * ptPerCssPx;
       const contentHeightPt = pageHeightPt - headerHeightPt - footerHeightPt;
-      const contentHeightPx = Math.floor(contentHeightPt / scale);
+      const contentHeightCssPx = contentHeightPt / ptPerCssPx;
 
-      if (contentHeightPx <= 20) {
+      if (contentHeightCssPx <= 40) {
         throw new Error("Header/footer leave no room for content — check letterhead sizing.");
       }
 
+      // Render body live in the stage so getBoundingClientRect() reflects
+      // real layout, THEN screenshot it once we know the break points.
+      const bodyDiv = document.createElement("div");
+      bodyDiv.style.width = RENDER_WIDTH + "px";
+      bodyDiv.style.background = "#ffffff";
+      bodyDiv.innerHTML = body;
+      stage.appendChild(bodyDiv);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+      const totalHeightCss = bodyDiv.getBoundingClientRect().height;
+      const breakOffsets = collectBreakOffsets(bodyDiv, contentHeightCssPx);
+      const pages = paginate(breakOffsets, totalHeightCss, contentHeightCssPx);
+
+      const bodyCanvas = await renderToCanvas(bodyDiv);
+      stage.removeChild(bodyDiv);
+
+      const cssPxToCanvasPx = bodyCanvas.width / RENDER_WIDTH; // == RENDER_SCALE in practice
+
       const headerImg = headerCanvas.toDataURL("image/jpeg", 0.98);
       const footerImg = footerCanvas.toDataURL("image/jpeg", 0.98);
+      const totalPages = Math.max(1, pages.length);
 
-      const totalPages = Math.max(1, Math.ceil(bodyCanvas.height / contentHeightPx));
-
-      for (let page = 0; page < totalPages; page++) {
-        if (page > 0) pdf.addPage();
-
-        const sliceY = page * contentHeightPx;
-        const sliceHeightPx = Math.min(contentHeightPx, bodyCanvas.height - sliceY);
+      for (let i = 0; i < totalPages; i++) {
+        if (i > 0) pdf.addPage();
+        const [startCss, endCss] = pages[i] || [0, 0];
+        const sliceStartPx = Math.round(startCss * cssPxToCanvasPx);
+        const sliceHeightPx = Math.max(1, Math.round((endCss - startCss) * cssPxToCanvasPx));
 
         const sliceCanvas = document.createElement("canvas");
         sliceCanvas.width = bodyCanvas.width;
@@ -393,17 +465,18 @@ const SFM = (function () {
         const ctx = sliceCanvas.getContext("2d");
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, sliceCanvas.width, sliceCanvas.height);
-        ctx.drawImage(bodyCanvas, 0, sliceY, bodyCanvas.width, sliceHeightPx, 0, 0, bodyCanvas.width, sliceHeightPx);
+        ctx.drawImage(bodyCanvas, 0, sliceStartPx, bodyCanvas.width, sliceHeightPx, 0, 0, bodyCanvas.width, sliceHeightPx);
         const sliceImg = sliceCanvas.toDataURL("image/jpeg", 0.98);
+        const sliceHeightPt = sliceHeightPx / cssPxToCanvasPx * ptPerCssPx;
 
         pdf.addImage(headerImg, "JPEG", 0, 0, pageWidthPt, headerHeightPt);
-        pdf.addImage(sliceImg, "JPEG", 0, headerHeightPt, pageWidthPt, sliceHeightPx * scale);
+        pdf.addImage(sliceImg, "JPEG", 0, headerHeightPt, pageWidthPt, sliceHeightPt);
         pdf.addImage(footerImg, "JPEG", 0, pageHeightPt - footerHeightPt, pageWidthPt, footerHeightPt);
 
         pdf.setFont("helvetica", "normal");
         pdf.setFontSize(7.5);
         pdf.setTextColor(120, 120, 120);
-        pdf.text(`Page ${page + 1} of ${totalPages}`, pageWidthPt - 14, pageHeightPt - 5, { align: "right" });
+        pdf.text(`Page ${i + 1} of ${totalPages}`, pageWidthPt - 14, pageHeightPt - 5, { align: "right" });
       }
 
       pdf.save(filename);
