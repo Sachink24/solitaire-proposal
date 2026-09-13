@@ -232,7 +232,7 @@
     return { invoiceNo: `SFM/INV/${fy}/${String(seq).padStart(4, "0")}`, fy };
   }
 
-  function buildInvoiceHTML({ lead, sanction, leadId }, invoiceNo, totals, meta, payments) {
+  function buildInvoiceDoc({ lead, sanction, leadId }, invoiceNo, totals, meta, payments) {
     const b = lead.borrower || {};
     const lnNumber = SFM.lnLabel(leadId);
     payments = payments || [];
@@ -246,26 +246,45 @@
         ? `<span style="color:#B45309; font-weight:bold;">PARTIALLY PAID</span>`
         : `<span style="color:#B45309; font-weight:bold;">UNPAID / DUE</span>`;
 
-    const paymentHistoryBlock = payments.length ? `
-      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Payment History</div>
+    // Part-payment ledger — always printed (even with zero rows yet) so the
+    // invoice itself carries a place to log installments as they come in.
+    const BLANK_PAYMENT_ROWS = 3;
+    const paymentRowsHTML = payments.length
+      ? payments.map(p => `
+        <tr>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.fmtDMY(p.payment_date)}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.mode || "—")}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.reference || "—")}</td>
+          <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">${SFM.formatINR(p.amount)}</td>
+        </tr>`).join("")
+      : Array.from({ length: BLANK_PAYMENT_ROWS }).map(() => `
+        <tr>
+          <td style="border:1px solid #ddd; padding:9px 10px;">&nbsp;</td>
+          <td style="border:1px solid #ddd; padding:9px 10px;">&nbsp;</td>
+          <td style="border:1px solid #ddd; padding:9px 10px;">&nbsp;</td>
+          <td style="border:1px solid #ddd; padding:9px 10px;">&nbsp;</td>
+        </tr>`).join("");
+
+    const paymentLedgerBlock = `
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Part-Payment Ledger</div>
       <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
-      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:12px;">
         <tr>
           <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Date</th>
           <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Mode</th>
           <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:left;">Reference</th>
           <th style="background:#F5EFDD; border:1px solid #ddd; padding:6px 10px; text-align:right;">Amount</th>
         </tr>
-        ${payments.map(p => `
-        <tr>
-          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.fmtDMY(p.payment_date)}</td>
-          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.mode || "—")}</td>
-          <td style="border:1px solid #ddd; padding:6px 10px;">${SFM.esc(p.reference || "—")}</td>
-          <td style="border:1px solid #ddd; padding:6px 10px; text-align:right;">${SFM.formatINR(p.amount)}</td>
-        </tr>`).join("")}
-      </table>` : "";
+        ${paymentRowsHTML}
+      </table>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
+        ${SFM.row("Total Payable", `<b>${SFM.formatINR(totals.total)}</b>`)}
+        ${SFM.row("Amount Paid Till Date", SFM.formatINR(paidSoFar))}
+        ${SFM.row("Balance Payment Due", `<b style="color:${balanceDue > 0 ? "#B45309" : "#2E7D32"};">${SFM.formatINR(balanceDue)}</b>`)}
+      </table>`;
 
-    return SFM.letterheadOpen("Invoice No.", invoiceNo) + `
+    const body = `
+      <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 8px 36px 4px; box-sizing:border-box;">
       <div style="text-align:center; font-family:Cambria, Georgia, serif; font-size:18px; font-weight:bold; letter-spacing:1px; margin-bottom:16px;">
         TAX INVOICE
       </div>
@@ -317,12 +336,7 @@
         ${meta.dueDate ? SFM.row("Payment Due Date", SFM.fmtDMY(meta.dueDate)) : ""}
       </table>
 
-      ${paymentHistoryBlock}
-
-      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-bottom:16px;">
-        ${SFM.row("Amount Paid", SFM.formatINR(paidSoFar))}
-        ${SFM.row("Balance Due", `<b style="color:${balanceDue > 0 ? "#B45309" : "#2E7D32"};">${SFM.formatINR(balanceDue)}</b>`)}
-      </table>
+      ${paymentLedgerBlock}
 
       <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">Bank Details for Payment</div>
       <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
@@ -337,13 +351,21 @@
       <div style="font-size:11px; color:#555; line-height:1.6; margin-bottom:20px;">
         This is a computer-generated invoice for professional/facilitation services and does not represent
         any charge levied by the Bank/NBFC. GST, if applicable, is charged as per prevailing rates. This
-        amount is non-refundable except where explicitly agreed in writing.
+        amount is non-refundable except where explicitly agreed in writing. Payment may be made in full or
+        in installments; each installment received will be logged in the Part-Payment Ledger above against
+        this invoice until the Balance Payment Due reaches zero.
       </div>
 
       <div style="font-size:12px; margin-bottom:6px;">For Solitaire Finz Mart,</div>
       <div style="font-size:13px; font-weight:bold; margin-top:34px;">Sachin Shivaji Kale</div>
       <div style="font-size:12px; font-style:italic; color:#555;">Managing Partner</div>
-      ` + SFM.letterheadClose("This is a system-generated invoice and does not require a physical signature.");
+      </div>`;
+
+    return {
+      header: SFM.letterheadHeader("Invoice No.", invoiceNo, SFM.todayDMY()),
+      body,
+      footer: SFM.letterheadFooter("This is a system-generated invoice and does not require a physical signature."),
+    };
   }
 
   window.handleGenerateClick = async function handleGenerateClick() {
@@ -385,8 +407,8 @@
       if (insertErr) throw insertErr;
 
       btn.textContent = "Generating PDF…";
-      const html = buildInvoiceHTML(currentBundle, invoiceNo, totals, meta, []);
-      await SFM.exportHTMLToPDF(html, `Invoice_${invoiceNo.replace(/\//g, "-")}.pdf`);
+      const doc = buildInvoiceDoc(currentBundle, invoiceNo, totals, meta, []);
+      await SFM.exportHTMLToPDFPaged(doc, `Invoice_${invoiceNo.replace(/\//g, "-")}.pdf`);
 
       status.className = "ok";
       status.textContent = `${invoiceNo} saved and PDF generated. Record payments for it below.`;
@@ -585,8 +607,8 @@
       };
       const meta = { dueDate: inv.due_date };
 
-      const html = buildInvoiceHTML({ lead: bundle.lead, sanction: sanctionForPdf, leadId: inv.lead_id }, inv.invoice_no, totals, meta, payments || []);
-      await SFM.exportHTMLToPDF(html, `Invoice_${inv.invoice_no.replace(/\//g, "-")}.pdf`);
+      const doc = buildInvoiceDoc({ lead: bundle.lead, sanction: sanctionForPdf, leadId: inv.lead_id }, inv.invoice_no, totals, meta, payments || []);
+      await SFM.exportHTMLToPDFPaged(doc, `Invoice_${inv.invoice_no.replace(/\//g, "-")}.pdf`);
       status.className = "ok"; status.textContent = "PDF generated.";
     } catch (err) {
       console.error(err);
