@@ -52,6 +52,10 @@
 
     <div id="preview"></div>
 
+    <label id="disbOptWrap" style="display:none;margin-top:12px;font-size:13px;cursor:pointer;">
+      <input type="checkbox" id="disbOpt" checked style="margin-right:6px;"> Include the disbursement statement in the letter
+    </label>
+
     <button id="genBtn" class="btn btn-gold" style="margin-top:16px;" onclick="handleGenerateClick()" disabled>Generate Sanction Letter PDF</button>
     <div id="status"></div>
   </div>
@@ -122,12 +126,15 @@
         genBtn.disabled = false;
       }
 
+      const disb = SFM.disbursementInfo(lead, sanction);
+      document.getElementById("disbOptWrap").style.display = disb.releases.length ? "block" : "none";
       preview.innerHTML = `
         <div class="preview-card">
           <div class="pk">Applicant</div><div class="pv">${SFM.esc(b.name || "—")}</div>
           <div class="pk">Loan Type</div><div class="pv">${SFM.esc(lead.loan_type || "—")}</div>
           <div class="pk">Bank / NBFC</div><div class="pv">${SFM.esc((sanction && sanction.banker) || lead.institution_name || "—")}</div>
           <div class="pk">Sanctioned Amount</div><div class="pv">${SFM.formatINR(amount)}</div>
+          <div class="pk">Disbursement</div><div class="pv">${SFM.esc(disb.status)}${disb.releases.length ? " — " + SFM.formatINR(disb.total) + (disb.amount ? " of " + SFM.formatINR(disb.amount) : "") : ""}</div>
           <div class="pk">Collateral Address</div><div class="pv">${SFM.esc(SFM.collateralAddress(lead))}</div>
         </div>`;
     } catch (err) {
@@ -144,6 +151,8 @@
     const applicantAddress = SFM.borrowerAddress(lead);
     const collateralAddress = SFM.collateralAddress(lead);
     const coApplicants = Array.isArray(lead.co_applicants) ? lead.co_applicants : [];
+    const includeDisb = !document.getElementById("disbOpt") || document.getElementById("disbOpt").checked;
+    const disbBlock = includeDisb ? SFM.disbursementSectionHTML(SFM.disbursementInfo(lead, sanction)) : "";
 
     const body = `
       <div style="font-family: Georgia, 'Times New Roman', serif; color:#1A1A1A; padding: 8px 36px 4px; box-sizing:border-box;">
@@ -196,7 +205,8 @@
       <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
       <div style="font-size:12px; line-height:1.6; margin-bottom:16px;">${SFM.esc(sanction.conditions)}</div>` : ""}
 
-      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px;">General Terms &amp; Conditions</div>
+      ${disbBlock}
+      <div style="font-family:Cambria, Georgia, serif; font-weight:bold; color:#C9A227; font-size:15px; margin-bottom:4px; margin-top:14px;">General Terms &amp; Conditions</div>
       <div style="border-bottom:1px solid #C4A672; margin-bottom:10px;"></div>
       <ul style="font-size:12px; line-height:1.6; padding-left:18px; margin-bottom:16px; list-style:disc;">
         <li>This sanction is valid subject to satisfactory completion of all pending documentation, legal/technical clearances and disbursement formalities as required by the Bank/NBFC.</li>
@@ -269,6 +279,7 @@
             { label: "Bank / NBFC", value: sanction.banker || lead.institution_name || "—" },
             ...(sanction.tenure_months ? [{ label: "Tenure", value: sanction.tenure_months + " Months" }] : []),
             ...(sanction.roi ? [{ label: "Rate of Interest", value: sanction.roi + "% p.a." }] : []),
+            ...(SFM.disbursementInfo(lead, sanction).releases.length ? [{ label: "Disbursed so far", value: SFM.formatINR(SFM.disbursementInfo(lead, sanction).total) }] : []),
           ],
         });
         const note = SFM.describeSendResults(sendResult);
