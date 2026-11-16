@@ -189,11 +189,13 @@
       status.className = "ok";
       status.textContent = `${SFM.lnLabel(leadId)} loaded.`;
 
+      const disb = SFM.disbursementInfo(lead, sanction);
       preview.innerHTML = `
         <div class="preview-card">
           <div class="pk">Applicant</div><div class="pv">${SFM.esc(b.name || "—")}</div>
           <div class="pk">Loan Type</div><div class="pv">${SFM.esc(lead.loan_type || "—")}</div>
           <div class="pk">Bank / NBFC</div><div class="pv">${SFM.esc((sanction && sanction.banker) || lead.institution_name || "—")}</div>
+          <div class="pk">Disbursement</div><div class="pv">${SFM.esc(disb.status)}${disb.releases.length ? " — " + SFM.formatINR(disb.total) + (disb.amount ? " of " + SFM.formatINR(disb.amount) : "") : ""}</div>
         </div>`;
 
       document.getElementById("feeInput").value = sanction && sanction.processing_fee ? Number(sanction.processing_fee) : "";
